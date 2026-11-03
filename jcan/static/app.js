@@ -15,6 +15,14 @@ const PID_LABELS = {
   ambient_air_temp: "Ambient Air Temp",
   time_since_codes_cleared: "Time Since Cleared",
   engine_oil_temp: "Engine Oil Temp",
+  o2_b1s1: "O2 Bank 1 Sensor 1",
+  o2_b1s2: "O2 Bank 1 Sensor 2",
+  o2_b1s3: "O2 Bank 1 Sensor 3",
+  o2_b1s4: "O2 Bank 1 Sensor 4",
+  o2_b2s1: "O2 Bank 2 Sensor 1",
+  o2_b2s2: "O2 Bank 2 Sensor 2",
+  o2_b2s3: "O2 Bank 2 Sensor 3",
+  o2_b2s4: "O2 Bank 2 Sensor 4",
 };
 
 function setupTabs() {
