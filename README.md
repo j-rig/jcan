@@ -16,6 +16,10 @@ One terminal — `main.py` embeds the simulator automatically whenever
 
 Open http://127.0.0.1:8000/
 
+Note: the Vehicles tab's "Decode VIN" button calls NHTSA's vPIC API over the
+network — everything else works fully offline, but that one button needs
+internet access.
+
 ## Run with real hardware
 
 Flash a CAN-to-USB dongle (e.g. CANable 2.0) to slcan firmware, plug it into
