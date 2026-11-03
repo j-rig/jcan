@@ -22,18 +22,44 @@ function setupTabs() {
   });
 }
 
+const GAUGE_HISTORY_LENGTH = 20;
+const gaugeHistories = {};
+
 function renderGauge(pid, value, unit) {
   let el = document.getElementById(`gauge-${pid}`);
   if (!el) {
     el = document.createElement("div");
     el.id = `gauge-${pid}`;
     el.className = "gauge";
-    el.innerHTML = `<div class="gauge-label">${PID_LABELS[pid] || pid}</div><div class="gauge-value"></div>`;
+    el.innerHTML = `
+      <div class="gauge-label">${PID_LABELS[pid] || pid}</div>
+      <div class="gauge-value"></div>
+      <svg class="gauge-sparkline" viewBox="0 0 100 30" preserveAspectRatio="none">
+        <polyline points=""></polyline>
+      </svg>
+    `;
     document.getElementById("gauges").appendChild(el);
   }
   el.dataset.lastUpdate = Date.now();
   el.querySelector(".gauge-value").textContent = `${value} ${unit}`;
   el.classList.remove("stale");
+
+  const history = gaugeHistories[pid] || (gaugeHistories[pid] = []);
+  history.push(value);
+  if (history.length > GAUGE_HISTORY_LENGTH) history.shift();
+
+  const min = Math.min(...history);
+  const max = Math.max(...history);
+  const range = max - min || 1;
+  const divisor = Math.max(history.length - 1, 1);
+  const points = history
+    .map((v, i) => {
+      const x = (i / divisor) * 100;
+      const y = 30 - ((v - min) / range) * 30;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  el.querySelector(".gauge-sparkline polyline").setAttribute("points", points);
 }
 
 function markStaleGauges() {

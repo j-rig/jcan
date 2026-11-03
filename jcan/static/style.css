@@ -12,6 +12,8 @@ nav { display: flex; gap: 0.5rem; }
 .gauge.stale { opacity: 0.4; }
 .gauge-label { font-size: 0.9rem; color: #555; }
 .gauge-value { font-size: 1.8rem; font-weight: bold; }
+.gauge-sparkline { width: 100%; height: 30px; margin-top: 0.5rem; display: block; }
+.gauge-sparkline polyline { fill: none; stroke: #2a6; stroke-width: 2; }
 table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
 th, td { border: 1px solid #ccc; padding: 0.5rem; text-align: left; }
 textarea { width: 100%; min-height: 3rem; }
