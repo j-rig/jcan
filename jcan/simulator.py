@@ -57,6 +57,18 @@ class Simulator:
         return None
 
     def _handle_pid(self, pid: int) -> bytes | None:
+        if pid == 0x00:
+            return bytes([0x41, pid, 0x18, 0x3F, 0xB8, 0x03])
+        if pid == 0x20:
+            return bytes([0x41, pid, 0x00, 0x02, 0x80, 0x01])
+        if pid == 0x40:
+            return bytes([0x41, pid, 0x44, 0x04, 0x00, 0x10])
+        if pid == 0x13:
+            return bytes([0x41, pid, 0xC0])
+        if pid == 0x14:
+            return bytes([0x41, pid, 0x96, 0x80])
+        if pid == 0x15:
+            return bytes([0x41, pid, 0x8C, 0x80])
         if pid == 0x0C:
             self._rpm_phase += 1
             rpm_raw = 3000 + (self._rpm_phase % 10) * 100

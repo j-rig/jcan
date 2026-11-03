@@ -83,6 +83,30 @@ def test_stop_before_start_is_safe():
     bus.shutdown()
 
 
+def test_reader_discovers_supported_pids_including_o2():
+    channel = "reader-test-discovery"
+    bus_sim = create_bus("virtual", channel)
+    bus_reader = create_bus("virtual", channel)
+    sim = Simulator(bus_sim)
+    sim.start()
+
+    reader = Reader(bus_reader, poll_interval_s=1.0, pid_timeout_s=1.0)
+    reader.start()
+    try:
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and "o2_b1s1" not in {p.name for p in reader.live_pids}:
+            time.sleep(0.05)
+        discovered_names = {p.name for p in reader.live_pids}
+        assert "o2_b1s1" in discovered_names
+        assert "o2_b1s2" in discovered_names
+        assert "o2_b2s1" not in discovered_names
+    finally:
+        reader.stop()
+        sim.stop()
+        bus_sim.shutdown()
+        bus_reader.shutdown()
+
+
 def test_reader_vin_read_failure_continues_to_connected():
     channel = "reader-test-vin-failure"
     bus_reader = create_bus("virtual", channel)

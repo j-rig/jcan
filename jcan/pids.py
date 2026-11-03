@@ -66,3 +66,19 @@ LIVE_PIDS = [
 ]
 
 PIDS_BY_ID = {p.pid: p for p in LIVE_PIDS}
+
+
+def _decode_o2_voltage(data: bytes) -> float:
+    return round(data[0] / 200, 3)
+
+
+OPTIONAL_O2_PIDS = {
+    0x14: PidDef(0x14, "o2_b1s1", "V", _decode_o2_voltage),
+    0x15: PidDef(0x15, "o2_b1s2", "V", _decode_o2_voltage),
+    0x16: PidDef(0x16, "o2_b1s3", "V", _decode_o2_voltage),
+    0x17: PidDef(0x17, "o2_b1s4", "V", _decode_o2_voltage),
+    0x18: PidDef(0x18, "o2_b2s1", "V", _decode_o2_voltage),
+    0x19: PidDef(0x19, "o2_b2s2", "V", _decode_o2_voltage),
+    0x1A: PidDef(0x1A, "o2_b2s3", "V", _decode_o2_voltage),
+    0x1B: PidDef(0x1B, "o2_b2s4", "V", _decode_o2_voltage),
+}

@@ -73,3 +73,8 @@ def test_time_since_codes_cleared_decode():
 
 def test_engine_oil_temp_decode():
     assert _decode("engine_oil_temp", [0x6E]) == 70.0
+
+
+def test_o2_voltage_decode():
+    from jcan.pids import OPTIONAL_O2_PIDS
+    assert OPTIONAL_O2_PIDS[0x14].decode(bytes([0x96, 0x80])) == 0.75
