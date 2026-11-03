@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "requests>=2.31",
+    "pyserial>=3.5",
 ]
 
 [project.optional-dependencies]
