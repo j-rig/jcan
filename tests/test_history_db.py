@@ -61,11 +61,19 @@ def test_vehicles_view_lists_undecoded_vin():
 def test_upsert_vehicle_then_view_shows_decoded_info():
     db = _db()
     db.record_active_codes(["P0301"], vin="VIN123")
-    db.upsert_vehicle("VIN123", "Honda", "Civic", "2018")
+    db.upsert_vehicle("VIN123", "Honda", "Civic", "2018", raw_json='{"Trim": "EX"}')
     rows = db.vehicles_view()
     assert rows[0]["make"] == "Honda"
     assert rows[0]["model"] == "Civic"
     assert rows[0]["year"] == "2018"
+    assert rows[0]["raw_json"] == '{"Trim": "EX"}'
+
+
+def test_vehicles_view_raw_json_is_none_when_undecoded():
+    db = _db()
+    db.record_active_codes(["P0301"], vin="VIN123")
+    rows = db.vehicles_view()
+    assert rows[0]["raw_json"] is None
 
 
 def test_active_events_includes_decoded_vehicle_info():

@@ -26,4 +26,4 @@ def decode_vin(vin: str, http_get=requests.get) -> dict:
     if not make:
         raise VinDecodeError("VIN could not be decoded (no make returned)")
 
-    return {"make": make, "model": model, "year": year}
+    return {"make": make, "model": model, "year": year, "raw": result}

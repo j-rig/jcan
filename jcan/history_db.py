@@ -33,6 +33,7 @@ class HistoryDB:
                 make TEXT NOT NULL,
                 model TEXT NOT NULL,
                 year TEXT NOT NULL,
+                raw_json TEXT NOT NULL DEFAULT '{}',
                 decoded_at TEXT NOT NULL
             )
             """
@@ -104,7 +105,7 @@ class HistoryDB:
     def vehicles_view(self) -> list[dict]:
         cur = self._conn.execute(
             """
-            SELECT DISTINCT e.vin AS vin, v.make, v.model, v.year, v.decoded_at
+            SELECT DISTINCT e.vin AS vin, v.make, v.model, v.year, v.raw_json, v.decoded_at
             FROM dtc_events e
             LEFT JOIN vehicles v ON v.vin = e.vin
             WHERE e.vin IS NOT NULL
@@ -112,18 +113,19 @@ class HistoryDB:
         )
         return [dict(row) for row in cur.fetchall()]
 
-    def upsert_vehicle(self, vin: str, make: str, model: str, year: str) -> None:
+    def upsert_vehicle(self, vin: str, make: str, model: str, year: str, raw_json: str = "{}") -> None:
         now = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
             """
-            INSERT INTO vehicles (vin, make, model, year, decoded_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO vehicles (vin, make, model, year, raw_json, decoded_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(vin) DO UPDATE SET
                 make = excluded.make,
                 model = excluded.model,
                 year = excluded.year,
+                raw_json = excluded.raw_json,
                 decoded_at = excluded.decoded_at
             """,
-            (vin, make, model, year, now),
+            (vin, make, model, year, raw_json, now),
         )
         self._conn.commit()

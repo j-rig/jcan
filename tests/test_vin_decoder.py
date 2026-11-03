@@ -19,10 +19,15 @@ class FakeResponse:
 
 def test_decode_vin_success():
     def fake_get(url, timeout):
-        return FakeResponse({"Results": [{"Make": "Honda", "Model": "Civic", "ModelYear": "2018"}]})
+        return FakeResponse({
+            "Results": [{"Make": "Honda", "Model": "Civic", "ModelYear": "2018", "Trim": "EX"}]
+        })
 
     result = decode_vin("1HGCM82633A004352", http_get=fake_get)
-    assert result == {"make": "Honda", "model": "Civic", "year": "2018"}
+    assert result["make"] == "Honda"
+    assert result["model"] == "Civic"
+    assert result["year"] == "2018"
+    assert result["raw"]["Trim"] == "EX"
 
 
 def test_decode_vin_not_found_raises():
