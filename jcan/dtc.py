@@ -1,9 +1,3 @@
-DTC_DESCRIPTIONS = {
-    "P0133": "O2 Sensor Circuit Slow Response (Bank 1 Sensor 1)",
-    "P0301": "Cylinder 1 Misfire Detected",
-    "P0420": "Catalyst System Efficiency Below Threshold (Bank 1)",
-}
-
 _TYPE_CHARS = {0b00: "P", 0b01: "C", 0b10: "B", 0b11: "U"}
 
 
@@ -24,7 +18,3 @@ def decode_dtcs(data: bytes) -> list[str]:
             continue
         codes.append(decode_dtc(b1, b2))
     return codes
-
-
-def describe_dtc(code: str) -> str:
-    return DTC_DESCRIPTIONS.get(code, "Unknown DTC")

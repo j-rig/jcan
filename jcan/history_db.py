@@ -1,5 +1,9 @@
+import json
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
+
+SEED_DATA_PATH = Path(__file__).parent / "seed_data" / "dtc_codes.json"
 
 
 class HistoryDB:
@@ -7,6 +11,7 @@ class HistoryDB:
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
+        self._seed_dtc_reference()
 
     def _init_schema(self) -> None:
         self._conn.execute(
@@ -14,7 +19,6 @@ class HistoryDB:
             CREATE TABLE IF NOT EXISTS dtc_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 code TEXT NOT NULL,
-                description TEXT NOT NULL,
                 vin TEXT,
                 first_seen TEXT NOT NULL,
                 cleared_at TEXT,
@@ -33,32 +37,59 @@ class HistoryDB:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dtc_reference (
+                code TEXT NOT NULL,
+                make TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL,
+                PRIMARY KEY (code, make)
+            )
+            """
+        )
         self._conn.commit()
 
-    def record_active_codes(self, codes: list[tuple[str, str]], vin: str | None) -> None:
+    def _seed_dtc_reference(self) -> None:
+        entries = json.loads(SEED_DATA_PATH.read_text())
+        for entry in entries:
+            self._conn.execute(
+                """
+                INSERT INTO dtc_reference (code, make, description)
+                VALUES (?, ?, ?)
+                ON CONFLICT(code, make) DO UPDATE SET description = excluded.description
+                """,
+                (entry["code"], entry.get("make", ""), entry["description"]),
+            )
+        self._conn.commit()
+
+    def record_active_codes(self, codes: list[str], vin: str | None) -> None:
         now = datetime.now(timezone.utc).isoformat()
         existing = {
             row["code"]
             for row in self._conn.execute("SELECT code FROM dtc_events WHERE cleared_at IS NULL")
         }
-        for code, description in codes:
+        for code in codes:
             if code not in existing:
                 self._conn.execute(
-                    "INSERT INTO dtc_events (code, description, vin, first_seen, cleared_at, notes) "
-                    "VALUES (?, ?, ?, ?, NULL, '')",
-                    (code, description, vin, now),
+                    "INSERT INTO dtc_events (code, vin, first_seen, cleared_at, notes) "
+                    "VALUES (?, ?, ?, NULL, '')",
+                    (code, vin, now),
                 )
+                existing.add(code)
         self._conn.commit()
 
     def active_events(self) -> list[dict]:
         cur = self._conn.execute(
             """
-            SELECT e.id, e.code, e.description, e.vin, e.first_seen, e.cleared_at, e.notes,
-                   v.make, v.model, v.year
+            SELECT e.id, e.code, e.vin, e.first_seen, e.cleared_at, e.notes,
+                   v.make, v.model, v.year,
+                   COALESCE(specific.description, generic.description, 'Unknown DTC') AS description
             FROM dtc_events e
             LEFT JOIN vehicles v ON v.vin = e.vin
+            LEFT JOIN dtc_reference specific ON specific.code = e.code AND specific.make = v.make
+            LEFT JOIN dtc_reference generic ON generic.code = e.code AND generic.make = ''
             WHERE e.cleared_at IS NULL
-            ORDER BY e.first_seen
+            ORDER BY e.first_seen, e.id
             """
         )
         return [dict(row) for row in cur.fetchall()]

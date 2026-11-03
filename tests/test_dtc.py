@@ -1,4 +1,4 @@
-from jcan.dtc import decode_dtc, decode_dtcs, describe_dtc
+from jcan.dtc import decode_dtc, decode_dtcs
 
 
 def test_decode_single_dtc_powertrain():
@@ -21,11 +21,3 @@ def test_decode_dtcs_multiple():
 
 def test_decode_dtcs_empty():
     assert decode_dtcs(b"") == []
-
-
-def test_describe_known_code():
-    assert describe_dtc("P0301") == "Cylinder 1 Misfire Detected"
-
-
-def test_describe_unknown_code():
-    assert describe_dtc("P9999") == "Unknown DTC"
