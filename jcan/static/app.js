@@ -45,15 +45,25 @@ function markStaleGauges() {
 }
 
 function setupWebSocket() {
-  const ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onmessage = (event) => {
-    const message = JSON.parse(event.data);
-    if (message.type === "reading") {
-      renderGauge(message.pid, message.value, message.unit);
-    } else if (message.type === "status") {
-      showConnectionStatus(message.status);
-    }
-  };
+  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+
+  function connect() {
+    const ws = new WebSocket(`${scheme}//${location.host}/ws`);
+    ws.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type === "reading") {
+        renderGauge(message.pid, message.value, message.unit);
+      } else if (message.type === "status") {
+        showConnectionStatus(message.status);
+      }
+    };
+    ws.onclose = () => {
+      showConnectionStatus("disconnected");
+      setTimeout(connect, 2000);
+    };
+  }
+
+  connect();
   setInterval(markStaleGauges, 1000);
 }
 
@@ -82,23 +92,27 @@ function escapeHtml(text) {
 
 async function loadDtcs() {
   const response = await fetch("/dtcs");
-  const events = await response.json();
   const tbody = document.querySelector("#dtc-table tbody");
+  if (!response.ok) {
+    tbody.innerHTML = `<tr><td colspan="5">Error loading codes: ${escapeHtml(await response.text())}</td></tr>`;
+    return;
+  }
+  const events = await response.json();
   tbody.innerHTML = "";
   for (const event of events) {
     const row = document.createElement("tr");
     row.innerHTML = `
-      <td>${event.code}</td>
-      <td>${event.description}</td>
-      <td>${vehicleLabel(event)}</td>
-      <td>${event.first_seen}</td>
-      <td><textarea data-id="${event.id}">${event.notes || ""}</textarea></td>
+      <td>${escapeHtml(event.code)}</td>
+      <td>${escapeHtml(event.description)}</td>
+      <td>${escapeHtml(vehicleLabel(event))}</td>
+      <td>${escapeHtml(event.first_seen)}</td>
+      <td><textarea data-id="${event.id}">${escapeHtml(event.notes || "")}</textarea></td>
     `;
     tbody.appendChild(row);
   }
   tbody.querySelectorAll("textarea").forEach((textarea) => {
     textarea.addEventListener("blur", async () => {
-      await fetch(`/dtcs/${textarea.dataset.id}/notes`, {
+      await fetch(`/dtcs/${encodeURIComponent(textarea.dataset.id)}/notes`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ notes: textarea.value }),
@@ -109,22 +123,26 @@ async function loadDtcs() {
 
 async function loadVehicles() {
   const response = await fetch("/vehicles");
-  const vehicles = await response.json();
   const tbody = document.querySelector("#vehicle-table tbody");
+  if (!response.ok) {
+    tbody.innerHTML = `<tr><td colspan="6">Error loading vehicles: ${escapeHtml(await response.text())}</td></tr>`;
+    return;
+  }
+  const vehicles = await response.json();
   tbody.innerHTML = "";
   for (const vehicle of vehicles) {
     const row = document.createElement("tr");
     const decodedCell = vehicle.make
       ? ""
-      : `<button class="decode-button" data-vin="${vehicle.vin}">Decode VIN</button>`;
+      : `<button class="decode-button" data-vin="${escapeHtml(vehicle.vin)}">Decode VIN</button>`;
     const rawCell = vehicle.raw
       ? `<details><summary>View</summary><pre>${escapeHtml(JSON.stringify(vehicle.raw, null, 2))}</pre></details>`
       : "";
     row.innerHTML = `
-      <td>${vehicle.vin}</td>
-      <td>${vehicle.make || ""}</td>
-      <td>${vehicle.model || ""}</td>
-      <td>${vehicle.year || ""}</td>
+      <td>${escapeHtml(vehicle.vin)}</td>
+      <td>${escapeHtml(vehicle.make || "")}</td>
+      <td>${escapeHtml(vehicle.model || "")}</td>
+      <td>${escapeHtml(vehicle.year || "")}</td>
       <td>${rawCell}</td>
       <td>${decodedCell}</td>
     `;
@@ -134,7 +152,10 @@ async function loadVehicles() {
     button.addEventListener("click", async () => {
       button.disabled = true;
       button.textContent = "Decoding...";
-      const response = await fetch(`/vehicles/${button.dataset.vin}/decode`, { method: "POST" });
+      const response = await fetch(
+        `/vehicles/${encodeURIComponent(button.dataset.vin)}/decode`,
+        { method: "POST" }
+      );
       if (response.ok) {
         await loadVehicles();
       } else {
@@ -152,7 +173,10 @@ function setupDiagnosticsControls() {
   document.getElementById("confirm-clear-no").addEventListener("click", () => dialog.close());
   document.getElementById("confirm-clear-yes").addEventListener("click", async () => {
     dialog.close();
-    await fetch("/dtcs/clear", { method: "POST" });
+    const response = await fetch("/dtcs/clear", { method: "POST" });
+    if (!response.ok) {
+      alert(`Failed to clear codes: ${await response.text()}`);
+    }
     await loadDtcs();
   });
 }
