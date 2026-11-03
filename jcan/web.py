@@ -1,6 +1,7 @@
 import asyncio
 import json
 import queue as queue_module
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -27,11 +28,10 @@ async def _broadcast(clients: set, message: str) -> None:
 
 
 def create_app(reader, db: HistoryDB, static_dir: str) -> FastAPI:
-    app = FastAPI()
     clients: set = set()
 
-    @app.on_event("startup")
-    async def _on_startup():
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
         loop = asyncio.get_running_loop()
 
         def on_reading(name: str, value: float, unit: str) -> None:
@@ -45,10 +45,10 @@ def create_app(reader, db: HistoryDB, static_dir: str) -> FastAPI:
         reader.on_reading = on_reading
         reader.on_status = on_status
         reader.start()
-
-    @app.on_event("shutdown")
-    async def _on_shutdown():
+        yield
         reader.stop()
+
+    app = FastAPI(lifespan=lifespan)
 
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket):

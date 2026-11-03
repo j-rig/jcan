@@ -134,3 +134,21 @@ def test_decode_vehicle_502_on_failure(monkeypatch):
     with client:
         response = client.post("/vehicles/VIN123/decode")
     assert response.status_code == 502
+
+
+def test_websocket_broadcasts_reading():
+    client, reader, db = _client()
+    with client:
+        with client.websocket_connect("/ws") as websocket:
+            reader.on_reading("rpm", 1234.0, "rpm")
+            message = websocket.receive_json()
+    assert message == {"type": "reading", "pid": "rpm", "value": 1234.0, "unit": "rpm"}
+
+
+def test_websocket_broadcasts_status():
+    client, reader, db = _client()
+    with client:
+        with client.websocket_connect("/ws") as websocket:
+            reader.on_status("connected")
+            message = websocket.receive_json()
+    assert message == {"type": "status", "status": "connected"}
