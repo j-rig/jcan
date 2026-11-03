@@ -1093,158 +1093,390 @@ git commit -m "feat: SQLite history store for DTC events and decoded vehicles"
 
 ---
 
-### Task 7b: Manufacturer-specific DTC extensions
+### Task 7b: DTC reference data seeded from a repo-committed JSON file
 
 **Scope note:** this covers standard SAE meanings plus documented manufacturer-specific (P1xxx-range) code meanings for Honda and Mitsubishi — the makes of the 2008 Honda Accord, 2018 Mitsubishi Outlander Sport, and 2023 Honda Pilot. No speculative common-cause/repair guidance is included, only documented code meanings. This environment's web search tool is not returning live results (verified: it echoes general knowledge instead of real search hits), so this data comes from general automotive reference knowledge rather than a freshly verified source — treat it as a starting point and cross-check against the vehicles' actual service manuals before relying on it for repairs.
 
+**Design change from the original Task 7b:** the reference data now lives in a JSON file committed to the repo (`jcan/seed_data/dtc_codes.json`), not as Python dicts. `HistoryDB` loads it into a new `dtc_reference` table on every init (upsert, so editing the JSON file always takes effect on next run — the file is the source of truth, the DB table is a queryable cache of it). DTC event descriptions are no longer stored on `dtc_events` at insert time — they're derived at *read* time in `active_events()` by joining `dtc_events` → `vehicles` (for the decoded make) → `dtc_reference` (preferring a manufacturer-specific row, falling back to the generic row). This means a code recorded before its VIN was decoded automatically shows the correct manufacturer-specific meaning once decoding happens later, with no backfill step. This task modifies the already-completed Task 3 (`jcan/dtc.py` loses its description lookup — decoding is pure byte math only) and Task 7 (`jcan/history_db.py` loses the `description` column and gains the reference table + join-time lookup).
+
 **Files:**
-- Modify: `jcan/dtc.py`
-- Modify: `jcan/history_db.py`
-- Test: `tests/test_dtc.py` (add tests)
-- Test: `tests/test_history_db.py` (add test)
+- Modify: `jcan/dtc.py` (remove `describe_dtc`/`DTC_DESCRIPTIONS` — descriptions move to the DB)
+- Modify: `jcan/history_db.py` (add `dtc_reference` table + seeding, drop `description` column from `dtc_events`, change `record_active_codes` signature, derive description in `active_events`)
+- Create: `jcan/seed_data/dtc_codes.json`
+- Test: `tests/test_dtc.py` (remove the now-obsolete `describe_dtc` tests)
+- Test: `tests/test_history_db.py` (update existing tests for the new `record_active_codes` signature, add new description-derivation tests)
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Remove the description lookup from dtc.py**
 
-Append to `tests/test_dtc.py`:
+Replace `jcan/dtc.py` entirely with:
 ```python
-from jcan.dtc import manufacturer_extension
+_TYPE_CHARS = {0b00: "P", 0b01: "C", 0b10: "B", 0b11: "U"}
 
 
-def test_manufacturer_extension_known_honda_code():
-    assert manufacturer_extension("P1456", "Honda") == (
+def decode_dtc(byte1: int, byte2: int) -> str:
+    type_char = _TYPE_CHARS[(byte1 >> 6) & 0b11]
+    first_digit = (byte1 >> 4) & 0b11
+    second_digit = byte1 & 0b1111
+    third_digit = (byte2 >> 4) & 0b1111
+    fourth_digit = byte2 & 0b1111
+    return f"{type_char}{first_digit}{second_digit:X}{third_digit:X}{fourth_digit:X}"
+
+
+def decode_dtcs(data: bytes) -> list[str]:
+    codes = []
+    for i in range(0, len(data) - 1, 2):
+        b1, b2 = data[i], data[i + 1]
+        if b1 == 0 and b2 == 0:
+            continue
+        codes.append(decode_dtc(b1, b2))
+    return codes
+```
+
+Replace `tests/test_dtc.py` entirely with (drops the `describe_dtc`/`DTC_DESCRIPTIONS` tests, keeps the byte-decoding tests):
+```python
+from jcan.dtc import decode_dtc, decode_dtcs
+
+
+def test_decode_single_dtc_powertrain():
+    assert decode_dtc(0x01, 0x33) == "P0133"
+
+
+def test_decode_dtc_chassis_type():
+    assert decode_dtc(0x41, 0x00) == "C0100"
+
+
+def test_decode_dtcs_skips_zero_padding():
+    data = bytes([0x01, 0x33, 0x00, 0x00])
+    assert decode_dtcs(data) == ["P0133"]
+
+
+def test_decode_dtcs_multiple():
+    data = bytes([0x01, 0x33, 0x03, 0x01])
+    assert decode_dtcs(data) == ["P0133", "P0301"]
+
+
+def test_decode_dtcs_empty():
+    assert decode_dtcs(b"") == []
+```
+
+Run: `pytest tests/test_dtc.py -v`
+Expected: PASS (5 passed)
+
+- [ ] **Step 2: Add the seed data file**
+
+Create `jcan/seed_data/dtc_codes.json` (no `__init__.py` needed — this is read as a plain data file, not imported as a package):
+```json
+[
+  {"code": "P0101", "make": "", "description": "Mass or Volume Air Flow Circuit Range/Performance Problem"},
+  {"code": "P0102", "make": "", "description": "Mass or Volume Air Flow Circuit Low Input"},
+  {"code": "P0113", "make": "", "description": "Intake Air Temperature Circuit High Input"},
+  {"code": "P0128", "make": "", "description": "Coolant Thermostat (Coolant Temperature Below Thermostat Regulating Temperature)"},
+  {"code": "P0133", "make": "", "description": "O2 Sensor Circuit Slow Response (Bank 1 Sensor 1)"},
+  {"code": "P0135", "make": "", "description": "O2 Sensor Heater Circuit Malfunction (Bank 1 Sensor 1)"},
+  {"code": "P0300", "make": "", "description": "Random/Multiple Cylinder Misfire Detected"},
+  {"code": "P0301", "make": "", "description": "Cylinder 1 Misfire Detected"},
+  {"code": "P0302", "make": "", "description": "Cylinder 2 Misfire Detected"},
+  {"code": "P0303", "make": "", "description": "Cylinder 3 Misfire Detected"},
+  {"code": "P0304", "make": "", "description": "Cylinder 4 Misfire Detected"},
+  {"code": "P0401", "make": "", "description": "Exhaust Gas Recirculation Flow Insufficient Detected"},
+  {"code": "P0420", "make": "", "description": "Catalyst System Efficiency Below Threshold (Bank 1)"},
+  {"code": "P0440", "make": "", "description": "Evaporative Emission Control System Malfunction"},
+  {"code": "P0442", "make": "", "description": "Evaporative Emission Control System Leak Detected (Small Leak)"},
+  {"code": "P0455", "make": "", "description": "Evaporative Emission Control System Leak Detected (Large Leak)"},
+  {"code": "P0500", "make": "", "description": "Vehicle Speed Sensor Malfunction"},
+  {"code": "P0505", "make": "", "description": "Idle Control System Malfunction"},
+  {"code": "P0507", "make": "", "description": "Idle Air Control System RPM Higher Than Expected"},
+  {"code": "P1259", "make": "Honda", "description": "VTEC System Malfunction"},
+  {"code": "P1456", "make": "Honda", "description": "Evaporative Emission System Leak (Fuel Tank System)"},
+  {"code": "P1457", "make": "Honda", "description": "Evaporative Emission System Leak Detected (Fuel Tank System or Canister System)"},
+  {"code": "P1446", "make": "Mitsubishi", "description": "Evaporative Emission Control System Vent Control Valve Malfunction"}
+]
+```
+`make: ""` means a generic/SAE-standard code (applies regardless of manufacturer). A non-empty `make` is a manufacturer-specific override, only used when a DTC event's vehicle has been decoded to that exact make.
+
+- [ ] **Step 3: Write the failing tests for history_db.py's new behavior**
+
+Replace `tests/test_history_db.py` entirely with:
+```python
+from jcan.history_db import HistoryDB
+
+
+def _db():
+    return HistoryDB(":memory:")
+
+
+def test_record_active_codes_inserts_new():
+    db = _db()
+    db.record_active_codes(["P0301"], vin="VIN123")
+    events = db.active_events()
+    assert len(events) == 1
+    assert events[0]["code"] == "P0301"
+    assert events[0]["vin"] == "VIN123"
+    assert events[0]["cleared_at"] is None
+    assert events[0]["notes"] == ""
+
+
+def test_record_active_codes_does_not_duplicate():
+    db = _db()
+    db.record_active_codes(["P0301"], vin="VIN123")
+    db.record_active_codes(["P0301"], vin="VIN123")
+    assert len(db.active_events()) == 1
+
+
+def test_record_active_codes_dedupes_within_same_call():
+    db = _db()
+    db.record_active_codes(["P0301", "P0301"], vin="VIN123")
+    assert len(db.active_events()) == 1
+
+
+def test_clear_active_events_stamps_cleared_at():
+    db = _db()
+    db.record_active_codes(["P0301"], vin="VIN123")
+    db.clear_active_events()
+    assert db.active_events() == []
+
+
+def test_set_notes_updates_existing_event():
+    db = _db()
+    db.record_active_codes(["P0301"], vin="VIN123")
+    event_id = db.active_events()[0]["id"]
+    assert db.set_notes(event_id, "replaced spark plug") is True
+    assert db.active_events()[0]["notes"] == "replaced spark plug"
+
+
+def test_set_notes_returns_false_for_missing_event():
+    db = _db()
+    assert db.set_notes(999, "x") is False
+
+
+def test_vehicles_view_lists_undecoded_vin():
+    db = _db()
+    db.record_active_codes(["P0301"], vin="VIN123")
+    rows = db.vehicles_view()
+    assert len(rows) == 1
+    assert rows[0]["vin"] == "VIN123"
+    assert rows[0]["make"] is None
+
+
+def test_upsert_vehicle_then_view_shows_decoded_info():
+    db = _db()
+    db.record_active_codes(["P0301"], vin="VIN123")
+    db.upsert_vehicle("VIN123", "Honda", "Civic", "2018")
+    rows = db.vehicles_view()
+    assert rows[0]["make"] == "Honda"
+    assert rows[0]["model"] == "Civic"
+    assert rows[0]["year"] == "2018"
+
+
+def test_active_events_includes_decoded_vehicle_info():
+    db = _db()
+    db.record_active_codes(["P0301"], vin="VIN123")
+    db.upsert_vehicle("VIN123", "Honda", "Civic", "2018")
+    assert db.active_events()[0]["make"] == "Honda"
+
+
+def test_upsert_vehicle_updates_existing_row():
+    db = _db()
+    db.record_active_codes(["P0301"], vin="VIN123")
+    db.upsert_vehicle("VIN123", "Honda", "Civic", "2017")
+    db.upsert_vehicle("VIN123", "Honda", "Civic", "2018")
+    rows = db.vehicles_view()
+    assert len(rows) == 1
+    assert rows[0]["year"] == "2018"
+
+
+def test_recurring_dtc_after_clear_creates_new_active_row():
+    db = _db()
+    db.record_active_codes(["P0301"], vin="VIN123")
+    db.clear_active_events()
+    db.record_active_codes(["P0301"], vin="VIN123")
+    events = db.active_events()
+    assert len(events) == 1
+    assert events[0]["code"] == "P0301"
+    assert events[0]["cleared_at"] is None
+
+
+def test_active_events_description_uses_generic_seed_data():
+    db = _db()
+    db.record_active_codes(["P0301"], vin=None)
+    assert db.active_events()[0]["description"] == "Cylinder 1 Misfire Detected"
+
+
+def test_active_events_description_unknown_code_fallback():
+    db = _db()
+    db.record_active_codes(["P9999"], vin=None)
+    assert db.active_events()[0]["description"] == "Unknown DTC"
+
+
+def test_active_events_description_upgrades_to_manufacturer_specific_after_decode():
+    db = _db()
+    # P1456 is a Honda-specific code with no generic SAE meaning.
+    db.record_active_codes(["P1456"], vin="VIN123")
+    assert db.active_events()[0]["description"] == "Unknown DTC"
+    db.upsert_vehicle("VIN123", "Honda", "Accord", "2008")
+    assert db.active_events()[0]["description"] == (
         "Evaporative Emission System Leak (Fuel Tank System)"
     )
-
-
-def test_manufacturer_extension_known_mitsubishi_code():
-    assert manufacturer_extension("P1446", "Mitsubishi") == (
-        "Evaporative Emission Control System Vent Control Valve Malfunction"
-    )
-
-
-def test_manufacturer_extension_unknown_code_returns_none():
-    assert manufacturer_extension("P1456", "Mitsubishi") is None
-
-
-def test_manufacturer_extension_no_make_returns_none():
-    assert manufacturer_extension("P1456", None) is None
-
-
-def test_manufacturer_extension_unknown_make_returns_none():
-    assert manufacturer_extension("P1456", "Toyota") is None
 ```
 
-Append to `tests/test_history_db.py`:
+Run: `pytest tests/test_history_db.py -v`
+Expected: FAIL — `TypeError` (old `record_active_codes` still expects `(code, description)` tuples), missing `description` key errors, etc. This confirms the old implementation needs to change.
+
+- [ ] **Step 4: Rewrite history_db.py**
+
+Replace `jcan/history_db.py` entirely with:
 ```python
-def test_active_events_uses_manufacturer_extension_once_make_known():
-    db = _db()
-    # P1456 is a Honda-specific code, not in the generic SAE table, so the
-    # generic description recorded at insert time falls back to "Unknown DTC".
-    db.record_active_codes([("P1456", "Unknown DTC")], vin="VIN123")
-    db.upsert_vehicle("VIN123", "Honda", "Accord", "2008")
-    events = db.active_events()
-    assert events[0]["description"] == "Evaporative Emission System Leak (Fuel Tank System)"
-```
+import json
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
 
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `pytest tests/test_dtc.py tests/test_history_db.py -v`
-Expected: FAIL — `ImportError: cannot import name 'manufacturer_extension' from 'jcan.dtc'`, and the new `test_history_db.py` test fails with a mismatched description (`"Unknown DTC"` instead of the Honda-specific text).
-
-- [ ] **Step 3: Add the manufacturer extension table to dtc.py**
-
-Add to `jcan/dtc.py` (after `DTC_DESCRIPTIONS`, before `_TYPE_CHARS`):
-```python
-# Manufacturer-specific (P1xxx-range) code meanings. Scoped to the makes of
-# the vehicles this tool is used on. Standard/documented meanings only.
-MANUFACTURER_DTC_EXTENSIONS = {
-    "Honda": {
-        "P1259": "VTEC System Malfunction",
-        "P1456": "Evaporative Emission System Leak (Fuel Tank System)",
-        "P1457": "Evaporative Emission System Leak Detected (Fuel Tank System or Canister System)",
-    },
-    "Mitsubishi": {
-        "P1446": "Evaporative Emission Control System Vent Control Valve Malfunction",
-    },
-}
+SEED_DATA_PATH = Path(__file__).parent / "seed_data" / "dtc_codes.json"
 
 
-def manufacturer_extension(code: str, make: str | None) -> str | None:
-    if make and make in MANUFACTURER_DTC_EXTENSIONS:
-        return MANUFACTURER_DTC_EXTENSIONS[make].get(code)
-    return None
-```
+class HistoryDB:
+    def __init__(self, path: str):
+        self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._init_schema()
+        self._seed_dtc_reference()
 
-Also expand `DTC_DESCRIPTIONS` (the generic SAE table) with more standard codes, replacing the existing dict:
-```python
-DTC_DESCRIPTIONS = {
-    "P0101": "Mass or Volume Air Flow Circuit Range/Performance Problem",
-    "P0102": "Mass or Volume Air Flow Circuit Low Input",
-    "P0113": "Intake Air Temperature Circuit High Input",
-    "P0128": "Coolant Thermostat (Coolant Temperature Below Thermostat Regulating Temperature)",
-    "P0133": "O2 Sensor Circuit Slow Response (Bank 1 Sensor 1)",
-    "P0135": "O2 Sensor Heater Circuit Malfunction (Bank 1 Sensor 1)",
-    "P0300": "Random/Multiple Cylinder Misfire Detected",
-    "P0301": "Cylinder 1 Misfire Detected",
-    "P0302": "Cylinder 2 Misfire Detected",
-    "P0303": "Cylinder 3 Misfire Detected",
-    "P0304": "Cylinder 4 Misfire Detected",
-    "P0401": "Exhaust Gas Recirculation Flow Insufficient Detected",
-    "P0420": "Catalyst System Efficiency Below Threshold (Bank 1)",
-    "P0440": "Evaporative Emission Control System Malfunction",
-    "P0442": "Evaporative Emission Control System Leak Detected (Small Leak)",
-    "P0455": "Evaporative Emission Control System Leak Detected (Large Leak)",
-    "P0500": "Vehicle Speed Sensor Malfunction",
-    "P0505": "Idle Control System Malfunction",
-    "P0507": "Idle Air Control System RPM Higher Than Expected",
-}
-```
+    def _init_schema(self) -> None:
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dtc_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL,
+                vin TEXT,
+                first_seen TEXT NOT NULL,
+                cleared_at TEXT,
+                notes TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vehicles (
+                vin TEXT PRIMARY KEY,
+                make TEXT NOT NULL,
+                model TEXT NOT NULL,
+                year TEXT NOT NULL,
+                decoded_at TEXT NOT NULL
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dtc_reference (
+                code TEXT NOT NULL,
+                make TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL,
+                PRIMARY KEY (code, make)
+            )
+            """
+        )
+        self._conn.commit()
 
-- [ ] **Step 4: Use the extension in history_db.py's active_events()**
+    def _seed_dtc_reference(self) -> None:
+        entries = json.loads(SEED_DATA_PATH.read_text())
+        for entry in entries:
+            self._conn.execute(
+                """
+                INSERT INTO dtc_reference (code, make, description)
+                VALUES (?, ?, ?)
+                ON CONFLICT(code, make) DO UPDATE SET description = excluded.description
+                """,
+                (entry["code"], entry.get("make", ""), entry["description"]),
+            )
+        self._conn.commit()
 
-In `jcan/history_db.py`, add the import at the top:
-```python
-from .dtc import manufacturer_extension
-```
+    def record_active_codes(self, codes: list[str], vin: str | None) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        existing = {
+            row["code"]
+            for row in self._conn.execute("SELECT code FROM dtc_events WHERE cleared_at IS NULL")
+        }
+        for code in codes:
+            if code not in existing:
+                self._conn.execute(
+                    "INSERT INTO dtc_events (code, vin, first_seen, cleared_at, notes) "
+                    "VALUES (?, ?, ?, NULL, '')",
+                    (code, vin, now),
+                )
+                existing.add(code)
+        self._conn.commit()
 
-Replace the `active_events` method:
-```python
     def active_events(self) -> list[dict]:
         cur = self._conn.execute(
             """
-            SELECT e.id, e.code, e.description, e.vin, e.first_seen, e.cleared_at, e.notes,
-                   v.make, v.model, v.year
+            SELECT e.id, e.code, e.vin, e.first_seen, e.cleared_at, e.notes,
+                   v.make, v.model, v.year,
+                   COALESCE(specific.description, generic.description, 'Unknown DTC') AS description
             FROM dtc_events e
             LEFT JOIN vehicles v ON v.vin = e.vin
+            LEFT JOIN dtc_reference specific ON specific.code = e.code AND specific.make = v.make
+            LEFT JOIN dtc_reference generic ON generic.code = e.code AND generic.make = ''
             WHERE e.cleared_at IS NULL
-            ORDER BY e.first_seen
+            ORDER BY e.first_seen, e.id
             """
         )
-        events = []
-        for row in cur.fetchall():
-            event = dict(row)
-            extension = manufacturer_extension(event["code"], event["make"])
-            if extension:
-                event["description"] = extension
-            events.append(event)
-        return events
+        return [dict(row) for row in cur.fetchall()]
+
+    def clear_active_events(self) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute("UPDATE dtc_events SET cleared_at = ? WHERE cleared_at IS NULL", (now,))
+        self._conn.commit()
+
+    def set_notes(self, event_id: int, notes: str) -> bool:
+        cur = self._conn.execute("UPDATE dtc_events SET notes = ? WHERE id = ?", (notes, event_id))
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def vehicles_view(self) -> list[dict]:
+        cur = self._conn.execute(
+            """
+            SELECT DISTINCT e.vin AS vin, v.make, v.model, v.year, v.decoded_at
+            FROM dtc_events e
+            LEFT JOIN vehicles v ON v.vin = e.vin
+            WHERE e.vin IS NOT NULL
+            """
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def upsert_vehicle(self, vin: str, make: str, model: str, year: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            """
+            INSERT INTO vehicles (vin, make, model, year, decoded_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(vin) DO UPDATE SET
+                make = excluded.make,
+                model = excluded.model,
+                year = excluded.year,
+                decoded_at = excluded.decoded_at
+            """,
+            (vin, make, model, year, now),
+        )
+        self._conn.commit()
 ```
+
+Note two small fixes folded in here versus the original Task 7 implementation, both already flagged by the Task 7 code quality review: `record_active_codes` now adds each inserted code to `existing` inside the loop (so duplicate codes within a single call don't both get inserted), and `active_events`'s `ORDER BY` now includes `e.id` as a tiebreaker for deterministic ordering when timestamps collide.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `pytest tests/test_dtc.py tests/test_history_db.py -v`
-Expected: PASS (all tests in both files, including the 5 new `dtc.py` tests and the 1 new `history_db.py` test)
+Expected: PASS (5 in `test_dtc.py`, 14 in `test_history_db.py`)
 
 - [ ] **Step 6: Run the full suite to confirm no regressions**
 
 Run: `pytest -v`
-Expected: all previously-passing tests still pass.
+Expected: all tests pass. (Count will differ from a simple sum of prior totals since this task nets out at 5 dtc tests, down from 7, and 14 history_db tests, up from 10.)
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add jcan/dtc.py jcan/history_db.py tests/test_dtc.py tests/test_history_db.py
-git commit -m "feat: manufacturer-specific DTC extensions for Honda and Mitsubishi"
+git add jcan/dtc.py jcan/history_db.py jcan/seed_data/dtc_codes.json tests/test_dtc.py tests/test_history_db.py
+git commit -m "feat: seed DTC reference data from repo JSON, derive descriptions at read time"
 ```
 
 ---
@@ -1422,8 +1654,7 @@ def test_reader_submit_read_dtcs():
     try:
         status, payload = reader.submit("read_dtcs").get(timeout=3.0)
         assert status == "ok"
-        codes = {code for code, _description in payload}
-        assert codes == {"P0133", "P0301"}
+        assert set(payload) == {"P0133", "P0301"}
     finally:
         reader.stop()
         sim.stop()
@@ -1471,7 +1702,7 @@ from typing import Callable
 import can
 
 from . import pids as pids_module
-from .dtc import decode_dtcs, describe_dtc
+from .dtc import decode_dtcs
 from .obd2 import Obd2Error, Obd2Session
 
 
@@ -1542,7 +1773,7 @@ class Reader:
         try:
             if command.action == "read_dtcs":
                 codes = decode_dtcs(session.read_dtcs())
-                command.result.put(("ok", [(code, describe_dtc(code)) for code in codes]))
+                command.result.put(("ok", codes))
             elif command.action == "clear_dtcs":
                 session.clear_dtcs()
                 command.result.put(("ok", None))
@@ -1623,7 +1854,7 @@ def _client():
 
 def test_get_dtcs_records_and_returns_active_codes():
     client, reader, db = _client()
-    reader.set_next_result(("ok", [("P0301", "Cylinder 1 Misfire Detected")]))
+    reader.set_next_result(("ok", ["P0301"]))
     with client:
         response = client.get("/dtcs")
     assert response.status_code == 200
@@ -1643,7 +1874,7 @@ def test_get_dtcs_propagates_reader_error():
 
 def test_clear_dtcs_stamps_existing_events():
     client, reader, db = _client()
-    db.record_active_codes([("P0301", "desc")], vin="VIN123")
+    db.record_active_codes(["P0301"], vin="VIN123")
     reader.set_next_result(("ok", None))
     with client:
         response = client.post("/dtcs/clear")
@@ -1653,7 +1884,7 @@ def test_clear_dtcs_stamps_existing_events():
 
 def test_patch_notes_updates_event():
     client, reader, db = _client()
-    db.record_active_codes([("P0301", "desc")], vin="VIN123")
+    db.record_active_codes(["P0301"], vin="VIN123")
     event_id = db.active_events()[0]["id"]
     with client:
         response = client.patch(f"/dtcs/{event_id}/notes", json={"notes": "fixed it"})
@@ -1670,7 +1901,7 @@ def test_patch_notes_404_for_missing_event():
 
 def test_get_vehicles_lists_distinct_vins():
     client, reader, db = _client()
-    db.record_active_codes([("P0301", "desc")], vin="VIN123")
+    db.record_active_codes(["P0301"], vin="VIN123")
     with client:
         response = client.get("/vehicles")
     assert response.status_code == 200
@@ -1679,7 +1910,7 @@ def test_get_vehicles_lists_distinct_vins():
 
 def test_decode_vehicle_persists_result(monkeypatch):
     client, reader, db = _client()
-    db.record_active_codes([("P0301", "desc")], vin="VIN123")
+    db.record_active_codes(["P0301"], vin="VIN123")
 
     monkeypatch.setattr(
         "jcan.web.decode_vin",
