@@ -1,2 +1,51 @@
 <!DOCTYPE html>
-<html><head><title>jcan</title></head><body>placeholder</body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>jcan</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>jcan</h1>
+    <nav>
+      <button class="tab-button active" data-tab="gauges">Gauges</button>
+      <button class="tab-button" data-tab="diagnostics">Diagnostics</button>
+      <button class="tab-button" data-tab="vehicles">Vehicles</button>
+    </nav>
+    <div id="connection-banner" class="banner hidden"></div>
+  </header>
+
+  <section id="tab-gauges" class="tab active">
+    <div id="gauges"></div>
+  </section>
+
+  <section id="tab-diagnostics" class="tab">
+    <button id="refresh-dtcs">Refresh Codes</button>
+    <button id="clear-dtcs">Clear Codes</button>
+    <table id="dtc-table">
+      <thead>
+        <tr><th>Code</th><th>Description</th><th>VIN / Vehicle</th><th>First Seen</th><th>Notes</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section id="tab-vehicles" class="tab">
+    <table id="vehicle-table">
+      <thead>
+        <tr><th>VIN</th><th>Make</th><th>Model</th><th>Year</th><th>Full Data</th><th></th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <dialog id="confirm-clear-dialog">
+    <p>Clear all stored diagnostic codes from the vehicle?</p>
+    <button id="confirm-clear-yes">Yes, clear codes</button>
+    <button id="confirm-clear-no">Cancel</button>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
