@@ -1596,6 +1596,155 @@ git commit -m "feat: NHTSA vPIC VIN decoder"
 
 ---
 
+### Task 8b: Store and display the full raw VIN decode response
+
+**Design change:** NHTSA's vPIC API returns roughly 150 fields per VIN (trim, engine, body class, GVWR, etc.), not just make/model/year. Rather than discarding everything except those three summary fields, the full raw response is kept — stored in the database and shown in full on the Vehicles tab (Task 11). This modifies the already-shipped `jcan/vin_decoder.py` (Task 8) and `jcan/history_db.py` (Tasks 7/7b).
+
+**Files:**
+- Modify: `jcan/vin_decoder.py` (`decode_vin` also returns the raw result dict)
+- Modify: `jcan/history_db.py` (`vehicles` table gains `raw_json`, `upsert_vehicle` accepts it, `vehicles_view` returns it)
+- Test: `tests/test_vin_decoder.py` (update the success test)
+- Test: `tests/test_history_db.py` (update vehicle-related tests)
+
+- [ ] **Step 1: Update vin_decoder.py and its test**
+
+Replace the `test_decode_vin_success` function in `tests/test_vin_decoder.py` with:
+```python
+def test_decode_vin_success():
+    def fake_get(url, timeout):
+        return FakeResponse({
+            "Results": [{"Make": "Honda", "Model": "Civic", "ModelYear": "2018", "Trim": "EX"}]
+        })
+
+    result = decode_vin("1HGCM82633A004352", http_get=fake_get)
+    assert result["make"] == "Honda"
+    assert result["model"] == "Civic"
+    assert result["year"] == "2018"
+    assert result["raw"]["Trim"] == "EX"
+```
+(Leave the other 3 tests in that file untouched.)
+
+In `jcan/vin_decoder.py`, change the final `return` statement in `decode_vin` from:
+```python
+    return {"make": make, "model": model, "year": year}
+```
+to:
+```python
+    return {"make": make, "model": model, "year": year, "raw": result}
+```
+No other changes to that file.
+
+Run: `pytest tests/test_vin_decoder.py -v`
+Expected: PASS (4 passed)
+
+- [ ] **Step 2: Write the failing tests for history_db.py's raw_json handling**
+
+In `tests/test_history_db.py`, update these three existing calls to `upsert_vehicle` to also pass a `raw_json` argument, and add one new test. Replace:
+```python
+def test_upsert_vehicle_then_view_shows_decoded_info():
+    db = _db()
+    db.record_active_codes(["P0301"], vin="VIN123")
+    db.upsert_vehicle("VIN123", "Honda", "Civic", "2018")
+    rows = db.vehicles_view()
+    assert rows[0]["make"] == "Honda"
+    assert rows[0]["model"] == "Civic"
+    assert rows[0]["year"] == "2018"
+```
+with:
+```python
+def test_upsert_vehicle_then_view_shows_decoded_info():
+    db = _db()
+    db.record_active_codes(["P0301"], vin="VIN123")
+    db.upsert_vehicle("VIN123", "Honda", "Civic", "2018", raw_json='{"Trim": "EX"}')
+    rows = db.vehicles_view()
+    assert rows[0]["make"] == "Honda"
+    assert rows[0]["model"] == "Civic"
+    assert rows[0]["year"] == "2018"
+    assert rows[0]["raw_json"] == '{"Trim": "EX"}'
+
+
+def test_vehicles_view_raw_json_is_none_when_undecoded():
+    db = _db()
+    db.record_active_codes(["P0301"], vin="VIN123")
+    rows = db.vehicles_view()
+    assert rows[0]["raw_json"] is None
+```
+Leave `test_upsert_vehicle_updates_existing_row` as-is (it doesn't pass `raw_json`, relying on the default).
+
+Run: `pytest tests/test_history_db.py -v`
+Expected: FAIL — `rows[0]["raw_json"]` doesn't exist yet (old `vehicles_view` doesn't select it), and `upsert_vehicle` doesn't accept a `raw_json` keyword yet.
+
+- [ ] **Step 3: Update history_db.py**
+
+In `jcan/history_db.py`, replace the `vehicles` table definition inside `_init_schema`:
+```python
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vehicles (
+                vin TEXT PRIMARY KEY,
+                make TEXT NOT NULL,
+                model TEXT NOT NULL,
+                year TEXT NOT NULL,
+                raw_json TEXT NOT NULL DEFAULT '{}',
+                decoded_at TEXT NOT NULL
+            )
+            """
+        )
+```
+
+Replace `vehicles_view`:
+```python
+    def vehicles_view(self) -> list[dict]:
+        cur = self._conn.execute(
+            """
+            SELECT DISTINCT e.vin AS vin, v.make, v.model, v.year, v.raw_json, v.decoded_at
+            FROM dtc_events e
+            LEFT JOIN vehicles v ON v.vin = e.vin
+            WHERE e.vin IS NOT NULL
+            """
+        )
+        return [dict(row) for row in cur.fetchall()]
+```
+
+Replace `upsert_vehicle` (note the new `raw_json` parameter, defaulted so existing callers that don't care about it still work):
+```python
+    def upsert_vehicle(self, vin: str, make: str, model: str, year: str, raw_json: str = "{}") -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            """
+            INSERT INTO vehicles (vin, make, model, year, raw_json, decoded_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(vin) DO UPDATE SET
+                make = excluded.make,
+                model = excluded.model,
+                year = excluded.year,
+                raw_json = excluded.raw_json,
+                decoded_at = excluded.decoded_at
+            """,
+            (vin, make, model, year, raw_json, now),
+        )
+        self._conn.commit()
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `pytest tests/test_history_db.py tests/test_vin_decoder.py -v`
+Expected: PASS (16 in `test_history_db.py` — 14 prior + 2 new, 4 in `test_vin_decoder.py`)
+
+- [ ] **Step 5: Run the full suite to confirm no regressions**
+
+Run: `pytest -v`
+Expected: all tests pass (46 total: 44 before this task + 2 new).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add jcan/vin_decoder.py jcan/history_db.py tests/test_vin_decoder.py tests/test_history_db.py
+git commit -m "feat: store and expose full raw VIN decode response, not just make/model/year"
+```
+
+---
+
 ### Task 9: Background reader thread
 
 **Files:**
@@ -1905,7 +2054,9 @@ def test_get_vehicles_lists_distinct_vins():
     with client:
         response = client.get("/vehicles")
     assert response.status_code == 200
-    assert response.json()[0]["vin"] == "VIN123"
+    body = response.json()
+    assert body[0]["vin"] == "VIN123"
+    assert body[0]["raw"] is None  # not decoded yet
 
 
 def test_decode_vehicle_persists_result(monkeypatch):
@@ -1914,13 +2065,27 @@ def test_decode_vehicle_persists_result(monkeypatch):
 
     monkeypatch.setattr(
         "jcan.web.decode_vin",
-        lambda vin: {"make": "Honda", "model": "Civic", "year": "2018"},
+        lambda vin: {
+            "make": "Honda",
+            "model": "Civic",
+            "year": "2018",
+            "raw": {"Make": "Honda", "Model": "Civic", "ModelYear": "2018", "Trim": "EX"},
+        },
     )
     with client:
         response = client.post("/vehicles/VIN123/decode")
     assert response.status_code == 200
-    assert response.json()["make"] == "Honda"
-    assert db.vehicles_view()[0]["make"] == "Honda"
+    body = response.json()
+    assert body["make"] == "Honda"
+    assert body["raw"]["Trim"] == "EX"
+
+    rows = db.vehicles_view()
+    assert rows[0]["make"] == "Honda"
+    assert rows[0]["raw_json"] is not None
+
+    with client:
+        vehicles_response = client.get("/vehicles")
+    assert vehicles_response.json()[0]["raw"]["Trim"] == "EX"
 
 
 def test_decode_vehicle_502_on_failure(monkeypatch):
@@ -2042,7 +2207,11 @@ def create_app(reader, db: HistoryDB, static_dir: str) -> FastAPI:
 
     @app.get("/vehicles")
     async def get_vehicles():
-        return db.vehicles_view()
+        rows = db.vehicles_view()
+        for row in rows:
+            raw_json = row.pop("raw_json")
+            row["raw"] = json.loads(raw_json) if raw_json else None
+        return rows
 
     @app.post("/vehicles/{vin}/decode")
     async def decode_vehicle(vin: str):
@@ -2050,8 +2219,11 @@ def create_app(reader, db: HistoryDB, static_dir: str) -> FastAPI:
             decoded = await asyncio.to_thread(decode_vin, vin)
         except VinDecodeError as exc:
             raise HTTPException(status_code=502, detail=str(exc))
-        db.upsert_vehicle(vin, decoded["make"], decoded["model"], decoded["year"])
-        return {"vin": vin, **decoded}
+        db.upsert_vehicle(
+            vin, decoded["make"], decoded["model"], decoded["year"], json.dumps(decoded["raw"])
+        )
+        return {"vin": vin, "make": decoded["make"], "model": decoded["model"],
+                "year": decoded["year"], "raw": decoded["raw"]}
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -2123,7 +2295,7 @@ git commit -m "feat: FastAPI app with WebSocket gauge stream and DTC/vehicle RES
   <section id="tab-vehicles" class="tab">
     <table id="vehicle-table">
       <thead>
-        <tr><th>VIN</th><th>Make</th><th>Model</th><th>Year</th><th></th></tr>
+        <tr><th>VIN</th><th>Make</th><th>Model</th><th>Year</th><th>Full Data</th><th></th></tr>
       </thead>
       <tbody></tbody>
     </table>
@@ -2220,6 +2392,12 @@ function vehicleLabel(row) {
   return row.vin || "";
 }
 
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
 async function loadDtcs() {
   const response = await fetch("/dtcs");
   const events = await response.json();
@@ -2257,11 +2435,15 @@ async function loadVehicles() {
     const decodedCell = vehicle.make
       ? ""
       : `<button class="decode-button" data-vin="${vehicle.vin}">Decode VIN</button>`;
+    const rawCell = vehicle.raw
+      ? `<details><summary>View</summary><pre>${escapeHtml(JSON.stringify(vehicle.raw, null, 2))}</pre></details>`
+      : "";
     row.innerHTML = `
       <td>${vehicle.vin}</td>
       <td>${vehicle.make || ""}</td>
       <td>${vehicle.model || ""}</td>
       <td>${vehicle.year || ""}</td>
+      <td>${rawCell}</td>
       <td>${decodedCell}</td>
     `;
     tbody.appendChild(row);
@@ -2320,13 +2502,14 @@ nav { display: flex; gap: 0.5rem; }
 table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
 th, td { border: 1px solid #ccc; padding: 0.5rem; text-align: left; }
 textarea { width: 100%; min-height: 3rem; }
+#vehicle-table pre { max-width: 40rem; max-height: 20rem; overflow: auto; background: #f5f5f5; padding: 0.5rem; }
 ```
 
 - [ ] **Step 4: Manually verify in a browser**
 
 Run (terminal 1): `python -m jcan.simulator`
 Run (terminal 2): `JCAN_BUS_TYPE=virtual JCAN_CHANNEL=jcan-sim python -m jcan.main` (Task 12 creates `main.py` — come back to this step after Task 12, or skip ahead and run it then)
-Open: `http://127.0.0.1:8000/` and confirm: Gauges tab shows moving RPM/speed/etc., Diagnostics tab lists P0133/P0301 with editable notes and a working Clear Codes confirmation, Vehicles tab shows the VIN with a working Decode VIN button.
+Open: `http://127.0.0.1:8000/` and confirm: Gauges tab shows moving RPM/speed/etc., Diagnostics tab lists P0133/P0301 with editable notes and a working Clear Codes confirmation, Vehicles tab shows the VIN with a working Decode VIN button and, once decoded, an expandable "Full Data" section showing the complete raw NHTSA response.
 
 - [ ] **Step 5: Commit**
 
@@ -2421,7 +2604,12 @@ def test_full_app_against_simulator(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         "jcan.web.decode_vin",
-        lambda vin: {"make": "Honda", "model": "Civic", "year": "2018"},
+        lambda vin: {
+            "make": "Honda",
+            "model": "Civic",
+            "year": "2018",
+            "raw": {"Make": "Honda", "Model": "Civic", "ModelYear": "2018", "Trim": "EX"},
+        },
     )
 
     try:
@@ -2449,6 +2637,7 @@ def test_full_app_against_simulator(monkeypatch, tmp_path):
 
             vehicles_after = client.get("/vehicles").json()
             assert vehicles_after[0]["make"] == "Honda"
+            assert vehicles_after[0]["raw"]["Trim"] == "EX"
 
             clear_response = client.post("/dtcs/clear")
             assert clear_response.status_code == 200
