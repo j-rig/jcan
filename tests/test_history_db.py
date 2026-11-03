@@ -67,3 +67,24 @@ def test_active_events_includes_decoded_vehicle_info():
     db.record_active_codes([("P0301", "desc")], vin="VIN123")
     db.upsert_vehicle("VIN123", "Honda", "Civic", "2018")
     assert db.active_events()[0]["make"] == "Honda"
+
+
+def test_upsert_vehicle_updates_existing_row():
+    db = _db()
+    db.record_active_codes([("P0301", "desc")], vin="VIN123")
+    db.upsert_vehicle("VIN123", "Honda", "Civic", "2017")
+    db.upsert_vehicle("VIN123", "Honda", "Civic", "2018")
+    rows = db.vehicles_view()
+    assert len(rows) == 1
+    assert rows[0]["year"] == "2018"
+
+
+def test_recurring_dtc_after_clear_creates_new_active_row():
+    db = _db()
+    db.record_active_codes([("P0301", "desc")], vin="VIN123")
+    db.clear_active_events()
+    db.record_active_codes([("P0301", "desc")], vin="VIN123")
+    events = db.active_events()
+    assert len(events) == 1
+    assert events[0]["code"] == "P0301"
+    assert events[0]["cleared_at"] is None
