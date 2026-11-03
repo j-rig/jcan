@@ -2363,15 +2363,25 @@ function markStaleGauges() {
 }
 
 function setupWebSocket() {
-  const ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onmessage = (event) => {
-    const message = JSON.parse(event.data);
-    if (message.type === "reading") {
-      renderGauge(message.pid, message.value, message.unit);
-    } else if (message.type === "status") {
-      showConnectionStatus(message.status);
-    }
-  };
+  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+
+  function connect() {
+    const ws = new WebSocket(`${scheme}//${location.host}/ws`);
+    ws.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type === "reading") {
+        renderGauge(message.pid, message.value, message.unit);
+      } else if (message.type === "status") {
+        showConnectionStatus(message.status);
+      }
+    };
+    ws.onclose = () => {
+      showConnectionStatus("disconnected");
+      setTimeout(connect, 2000);
+    };
+  }
+
+  connect();
   setInterval(markStaleGauges, 1000);
 }
 
@@ -2400,23 +2410,27 @@ function escapeHtml(text) {
 
 async function loadDtcs() {
   const response = await fetch("/dtcs");
-  const events = await response.json();
   const tbody = document.querySelector("#dtc-table tbody");
+  if (!response.ok) {
+    tbody.innerHTML = `<tr><td colspan="5">Error loading codes: ${escapeHtml(await response.text())}</td></tr>`;
+    return;
+  }
+  const events = await response.json();
   tbody.innerHTML = "";
   for (const event of events) {
     const row = document.createElement("tr");
     row.innerHTML = `
-      <td>${event.code}</td>
-      <td>${event.description}</td>
-      <td>${vehicleLabel(event)}</td>
-      <td>${event.first_seen}</td>
-      <td><textarea data-id="${event.id}">${event.notes || ""}</textarea></td>
+      <td>${escapeHtml(event.code)}</td>
+      <td>${escapeHtml(event.description)}</td>
+      <td>${escapeHtml(vehicleLabel(event))}</td>
+      <td>${escapeHtml(event.first_seen)}</td>
+      <td><textarea data-id="${event.id}">${escapeHtml(event.notes || "")}</textarea></td>
     `;
     tbody.appendChild(row);
   }
   tbody.querySelectorAll("textarea").forEach((textarea) => {
     textarea.addEventListener("blur", async () => {
-      await fetch(`/dtcs/${textarea.dataset.id}/notes`, {
+      await fetch(`/dtcs/${encodeURIComponent(textarea.dataset.id)}/notes`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ notes: textarea.value }),
@@ -2427,22 +2441,26 @@ async function loadDtcs() {
 
 async function loadVehicles() {
   const response = await fetch("/vehicles");
-  const vehicles = await response.json();
   const tbody = document.querySelector("#vehicle-table tbody");
+  if (!response.ok) {
+    tbody.innerHTML = `<tr><td colspan="6">Error loading vehicles: ${escapeHtml(await response.text())}</td></tr>`;
+    return;
+  }
+  const vehicles = await response.json();
   tbody.innerHTML = "";
   for (const vehicle of vehicles) {
     const row = document.createElement("tr");
     const decodedCell = vehicle.make
       ? ""
-      : `<button class="decode-button" data-vin="${vehicle.vin}">Decode VIN</button>`;
+      : `<button class="decode-button" data-vin="${escapeHtml(vehicle.vin)}">Decode VIN</button>`;
     const rawCell = vehicle.raw
       ? `<details><summary>View</summary><pre>${escapeHtml(JSON.stringify(vehicle.raw, null, 2))}</pre></details>`
       : "";
     row.innerHTML = `
-      <td>${vehicle.vin}</td>
-      <td>${vehicle.make || ""}</td>
-      <td>${vehicle.model || ""}</td>
-      <td>${vehicle.year || ""}</td>
+      <td>${escapeHtml(vehicle.vin)}</td>
+      <td>${escapeHtml(vehicle.make || "")}</td>
+      <td>${escapeHtml(vehicle.model || "")}</td>
+      <td>${escapeHtml(vehicle.year || "")}</td>
       <td>${rawCell}</td>
       <td>${decodedCell}</td>
     `;
@@ -2452,7 +2470,10 @@ async function loadVehicles() {
     button.addEventListener("click", async () => {
       button.disabled = true;
       button.textContent = "Decoding...";
-      const response = await fetch(`/vehicles/${button.dataset.vin}/decode`, { method: "POST" });
+      const response = await fetch(
+        `/vehicles/${encodeURIComponent(button.dataset.vin)}/decode`,
+        { method: "POST" }
+      );
       if (response.ok) {
         await loadVehicles();
       } else {
@@ -2470,7 +2491,10 @@ function setupDiagnosticsControls() {
   document.getElementById("confirm-clear-no").addEventListener("click", () => dialog.close());
   document.getElementById("confirm-clear-yes").addEventListener("click", async () => {
     dialog.close();
-    await fetch("/dtcs/clear", { method: "POST" });
+    const response = await fetch("/dtcs/clear", { method: "POST" });
+    if (!response.ok) {
+      alert(`Failed to clear codes: ${await response.text()}`);
+    }
     await loadDtcs();
   });
 }
@@ -2507,9 +2531,27 @@ textarea { width: 100%; min-height: 3rem; }
 
 - [ ] **Step 4: Manually verify in a browser**
 
-Run (terminal 1): `python -m jcan.simulator`
-Run (terminal 2): `JCAN_BUS_TYPE=virtual JCAN_CHANNEL=jcan-sim python -m jcan.main` (Task 12 creates `main.py` — come back to this step after Task 12, or skip ahead and run it then)
-Open: `http://127.0.0.1:8000/` and confirm: Gauges tab shows moving RPM/speed/etc., Diagnostics tab lists P0133/P0301 with editable notes and a working Clear Codes confirmation, Vehicles tab shows the VIN with a working Decode VIN button and, once decoded, an expandable "Full Data" section showing the complete raw NHTSA response.
+**Correction:** `python-can`'s `virtual` bus backend is an in-process registry — it does not bridge across separate OS processes, so running the simulator and the app as two separate terminal processes on the same channel name does NOT work (confirmed by direct testing of `can.interfaces.virtual`: `channels`/`channels_lock` are plain module-level globals, private to whichever process imports them). Task 12 embeds the simulator directly inside `main.py`, in the same process, whenever `JCAN_BUS_TYPE=virtual` — there's no `jcan.main` yet at this point in the plan, so verify this task with a one-off inline script in a single terminal instead:
+```bash
+JCAN_BUS_TYPE=virtual python3 -c "
+import uvicorn
+from jcan.can_transport import create_bus
+from jcan.history_db import HistoryDB
+from jcan.reader import Reader
+from jcan.simulator import Simulator
+from jcan.web import create_app
+
+channel = 'jcan-sim'
+bus_sim = create_bus('virtual', channel)
+bus_reader = create_bus('virtual', channel)
+Simulator(bus_sim).start()
+db = HistoryDB('/tmp/jcan-task11-check.db')
+reader = Reader(bus_reader, poll_interval_s=1.0, pid_timeout_s=0.5)
+app = create_app(reader, db, static_dir='jcan/static')
+uvicorn.run(app, host='127.0.0.1', port=8000)
+"
+```
+Open: `http://127.0.0.1:8000/` and confirm: Gauges tab shows moving RPM/speed/etc., Diagnostics tab lists P0133/P0301 with editable notes and a working Clear Codes confirmation, Vehicles tab shows the VIN with a working Decode VIN button and, once decoded, an expandable "Full Data" section showing the complete raw NHTSA response. `Ctrl+C` when done, delete `/tmp/jcan-task11-check.db`.
 
 - [ ] **Step 5: Commit**
 
@@ -2521,6 +2563,8 @@ git commit -m "feat: Gauges/Diagnostics/Vehicles frontend"
 ---
 
 ### Task 12: Entrypoint wiring
+
+**Design correction:** `python-can`'s `virtual` bus backend only bridges `can.Bus` instances within a single process (it's a plain in-process dict registry — confirmed directly against `can.interfaces.virtual` source, and by Task 11's manual verification, which found that a standalone `python -m jcan.simulator` process and a separately-launched app process on the same channel name never see each other's traffic). So in virtual mode, `main.py` must own the simulator itself — opening a second `can.Bus` handle on the same channel and starting a `Simulator` on it in the same process — rather than expecting a separately-started simulator process to be reachable. In `slcan` mode (real hardware), no simulator is started at all.
 
 **Files:**
 - Create: `jcan/main.py`
@@ -2535,12 +2579,18 @@ from .can_transport import create_bus
 from .config import Config
 from .history_db import HistoryDB
 from .reader import Reader
+from .simulator import Simulator
 from .web import create_app
 
 
 def main() -> None:
     cfg = Config.from_env()
     bus = create_bus(cfg.bus_type, cfg.channel)
+
+    if cfg.bus_type == "virtual":
+        simulator_bus = create_bus("virtual", cfg.channel)
+        Simulator(simulator_bus).start()
+
     db = HistoryDB(cfg.db_path)
     reader = Reader(bus, poll_interval_s=cfg.poll_interval_s, pid_timeout_s=cfg.pid_timeout_s)
     app = create_app(reader, db, static_dir="jcan/static")
@@ -2553,12 +2603,11 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Manually smoke-test end to end (no hardware)**
 
-Run (terminal 1): `python -m jcan.simulator`
-Run (terminal 2):
+One terminal is now enough — `main.py` embeds the simulator itself in virtual mode:
 ```bash
 JCAN_BUS_TYPE=virtual JCAN_CHANNEL=jcan-sim python -m jcan.main
 ```
-Open: `http://127.0.0.1:8000/` and confirm all three tabs work (same checks as Task 11 Step 4). `Ctrl+C` both terminals when done.
+Open: `http://127.0.0.1:8000/` and confirm all three tabs work (same checks as Task 11 Step 4). `Ctrl+C` when done.
 
 Note the fail-fast behavior for real hardware: `create_bus("slcan", "/dev/tty.nonexistent")` raises immediately from `can.Bus(...)` (pyserial's error names the bad port) before the web server ever starts — this is what gives the "fail fast with a clear error naming the configured port" behavior from the design's error handling section, with no extra code needed.
 
@@ -2566,7 +2615,7 @@ Note the fail-fast behavior for real hardware: `create_bus("slcan", "/dev/tty.no
 
 ```bash
 git add jcan/main.py
-git commit -m "feat: service entrypoint wiring config, bus, db, reader, and web app"
+git commit -m "feat: service entrypoint wiring config, bus, db, reader, web app, and embedded simulator for virtual mode"
 ```
 
 ---
@@ -2682,13 +2731,10 @@ CAN, stores DTC history in SQLite, and serves a browser UI.
 
 ## Run without hardware (simulator)
 
-Terminal 1:
+One terminal — `main.py` embeds the simulator automatically whenever
+`JCAN_BUS_TYPE=virtual` (the default):
 
-    python -m jcan.simulator
-
-Terminal 2:
-
-    JCAN_BUS_TYPE=virtual JCAN_CHANNEL=jcan-sim python -m jcan.main
+    python -m jcan.main
 
 Open http://127.0.0.1:8000/
 
