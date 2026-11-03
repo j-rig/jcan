@@ -1,8 +1,38 @@
+import threading
 import time
 
+import isotp
+
+from jcan import pids as pids_module
 from jcan.can_transport import create_bus
 from jcan.reader import Reader
 from jcan.simulator import FAKE_VIN, Simulator
+
+
+def _start_custom_fake_server(bus, handler):
+    addr = isotp.Address(isotp.AddressingMode.Normal_11bits, txid=0x7E8, rxid=0x7DF)
+    stack = isotp.CanStack(bus, address=addr)
+    stack.start()
+    stop_event = threading.Event()
+
+    def run():
+        while not stop_event.is_set():
+            request = stack.recv(block=True, timeout=0.2)
+            if request is None:
+                continue
+            response = handler(bytes(request))
+            if response is not None:
+                stack.send(response)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+
+    def stop():
+        stop_event.set()
+        thread.join(timeout=1.0)
+        stack.stop()
+
+    return stop
 
 
 def test_reader_reads_vin_and_polls_pids():
@@ -125,4 +155,62 @@ def test_reader_vin_read_failure_continues_to_connected():
         assert reader.current_vin is None
     finally:
         reader.stop()
+        bus_reader.shutdown()
+
+
+def test_reader_excludes_unsupported_pids():
+    channel = "reader-test-exclude"
+    bus_server = create_bus("virtual", channel)
+    bus_reader = create_bus("virtual", channel)
+
+    def handler(request):
+        if request[0] == 0x09:
+            return None  # no VIN response; reader should still proceed to discovery
+        if request[0] == 0x01 and request[1] == 0x00:
+            # Only PID 0x0C (rpm) reported supported; nothing else, no next range.
+            return bytes([0x41, 0x00, 0x00, 0x10, 0x00, 0x00])
+        if request[0] == 0x01 and request[1] == 0x0C:
+            return bytes([0x41, 0x0C, 0x1A, 0xF8])
+        return None
+
+    stop_server = _start_custom_fake_server(bus_server, handler)
+    reader = Reader(bus_reader, poll_interval_s=1.0, pid_timeout_s=0.3)
+    reader.start()
+    try:
+        deadline = time.monotonic() + 3.0
+        default_names = {p.name for p in pids_module.LIVE_PIDS}
+        while time.monotonic() < deadline and {p.name for p in reader.live_pids} == default_names:
+            time.sleep(0.05)
+        names = {p.name for p in reader.live_pids}
+        assert names == {"rpm"}
+    finally:
+        reader.stop()
+        stop_server()
+        bus_server.shutdown()
+        bus_reader.shutdown()
+
+
+def test_reader_falls_back_to_full_catalog_when_discovery_fails():
+    channel = "reader-test-discovery-fail"
+    bus_server = create_bus("virtual", channel)
+    bus_reader = create_bus("virtual", channel)
+
+    def handler(request):
+        if request[0] == 0x09:
+            return bytes([0x49, 0x02, 0x01]) + b"1HGCM82633A004352"
+        return None  # PID 0x00 (and everything else) never answered
+
+    stop_server = _start_custom_fake_server(bus_server, handler)
+    reader = Reader(bus_reader, poll_interval_s=1.0, pid_timeout_s=0.3)
+    reader.start()
+    try:
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and reader.current_vin is None:
+            time.sleep(0.05)
+        time.sleep(0.5)  # give the (failing) discovery request time to time out and fall back
+        assert {p.name for p in reader.live_pids} == {p.name for p in pids_module.LIVE_PIDS}
+    finally:
+        reader.stop()
+        stop_server()
+        bus_server.shutdown()
         bus_reader.shutdown()

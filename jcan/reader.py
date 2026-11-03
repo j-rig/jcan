@@ -27,7 +27,7 @@ class Reader:
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self.current_vin: str | None = None
-        self.live_pids: list = list(pids_module.LIVE_PIDS)
+        self.live_pids: list[pids_module.PidDef] = list(pids_module.LIVE_PIDS)
         self.on_reading: Callable[[str, float, str], None] = lambda *_: None
         self.on_status: Callable[[str], None] = lambda *_: None
 
@@ -60,15 +60,20 @@ class Reader:
         try:
             supported = self._discover_supported_pids(session)
             self.live_pids = [p for p in pids_module.LIVE_PIDS if p.pid in supported]
-            if 0x13 in supported:
+        except Obd2Error:
+            supported = set()
+            self.live_pids = list(pids_module.LIVE_PIDS)
+
+        if 0x13 in supported:
+            try:
                 o2_present = pid_discovery.decode_o2_sensors_present(session.read_pid(0x13))
                 self.live_pids = self.live_pids + [
                     pids_module.OPTIONAL_O2_PIDS[pid]
                     for pid in sorted(o2_present)
                     if pid in pids_module.OPTIONAL_O2_PIDS
                 ]
-        except Obd2Error:
-            self.live_pids = list(pids_module.LIVE_PIDS)
+            except Obd2Error:
+                pass  # O2 sensor read failed; keep the already-discovered live_pids as-is
 
         self.on_status("connected")
         last_poll = 0.0
@@ -103,7 +108,7 @@ class Reader:
 
     def _discover_supported_pids(self, session: Obd2Session) -> set[int]:
         supported = pid_discovery.decode_supported_pids(0x00, session.read_pid(0x00))
-        for base in (0x20, 0x40, 0x60):
+        for base in (0x20, 0x40):
             if base not in supported:
                 break
             supported |= pid_discovery.decode_supported_pids(base, session.read_pid(base))
