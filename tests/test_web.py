@@ -83,6 +83,22 @@ def test_patch_notes_404_for_missing_event():
     assert response.status_code == 404
 
 
+def test_get_history_includes_cleared_events():
+    client, reader, db = _client()
+    db.record_active_codes(["P0301"], vin="VIN123")
+    db.clear_active_events()
+    db.record_active_codes(["P0420"], vin="VIN123")
+    with client:
+        response = client.get("/dtcs/history")
+    assert response.status_code == 200
+    body = response.json()
+    codes = {event["code"] for event in body}
+    assert codes == {"P0301", "P0420"}
+    cleared = {event["code"]: event["cleared_at"] for event in body}
+    assert cleared["P0301"] is not None
+    assert cleared["P0420"] is None
+
+
 def test_get_vehicles_lists_distinct_vins():
     client, reader, db = _client()
     db.record_active_codes(["P0301"], vin="VIN123")

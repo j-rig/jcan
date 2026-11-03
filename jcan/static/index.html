@@ -12,6 +12,7 @@
       <button class="tab-button active" data-tab="gauges">Gauges</button>
       <button class="tab-button" data-tab="diagnostics">Diagnostics</button>
       <button class="tab-button" data-tab="vehicles">Vehicles</button>
+      <button class="tab-button" data-tab="history">History</button>
     </nav>
     <div id="connection-banner" class="banner hidden"></div>
   </header>
@@ -35,6 +36,15 @@
     <table id="vehicle-table">
       <thead>
         <tr><th>VIN</th><th>Make</th><th>Model</th><th>Year</th><th>Full Data</th><th></th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section id="tab-history" class="tab">
+    <table id="history-table">
+      <thead>
+        <tr><th>Code</th><th>Description</th><th>VIN / Vehicle</th><th>First Seen</th><th>Cleared At</th><th>Notes</th></tr>
       </thead>
       <tbody></tbody>
     </table>

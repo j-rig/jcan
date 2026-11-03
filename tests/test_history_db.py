@@ -127,6 +127,21 @@ def test_active_events_description_upgrades_to_manufacturer_specific_after_decod
     )
 
 
+def test_all_events_includes_both_active_and_cleared():
+    db = _db()
+    db.record_active_codes(["P0301"], vin="VIN123")
+    db.record_active_codes(["P0420"], vin="VIN123")
+    db.clear_active_events()
+    db.record_active_codes(["P0133"], vin="VIN123")
+    rows = db.all_events()
+    codes = {row["code"] for row in rows}
+    assert codes == {"P0301", "P0420", "P0133"}
+    cleared_codes = {row["code"] for row in rows if row["cleared_at"] is not None}
+    assert cleared_codes == {"P0301", "P0420"}
+    active_codes = {row["code"] for row in rows if row["cleared_at"] is None}
+    assert active_codes == {"P0133"}
+
+
 def test_dtc_reference_reseed_removes_stale_entries(tmp_path, monkeypatch):
     import json
 

@@ -86,6 +86,10 @@ def create_app(reader, db: HistoryDB, static_dir: str) -> FastAPI:
         db.clear_active_events()
         return {"cleared": True}
 
+    @app.get("/dtcs/history")
+    async def get_history():
+        return db.all_events()
+
     @app.patch("/dtcs/{event_id}/notes")
     async def update_notes(event_id: int, body: NotesUpdate):
         updated = db.set_notes(event_id, body.notes)

@@ -17,6 +17,7 @@ function setupTabs() {
       document.getElementById(`tab-${button.dataset.tab}`).classList.add("active");
       if (button.dataset.tab === "diagnostics") loadDtcs();
       if (button.dataset.tab === "vehicles") loadVehicles();
+      if (button.dataset.tab === "history") loadHistory();
     });
   });
 }
@@ -106,6 +107,38 @@ async function loadDtcs() {
       <td>${escapeHtml(event.description)}</td>
       <td>${escapeHtml(vehicleLabel(event))}</td>
       <td>${escapeHtml(event.first_seen)}</td>
+      <td><textarea data-id="${event.id}">${escapeHtml(event.notes || "")}</textarea></td>
+    `;
+    tbody.appendChild(row);
+  }
+  tbody.querySelectorAll("textarea").forEach((textarea) => {
+    textarea.addEventListener("blur", async () => {
+      await fetch(`/dtcs/${encodeURIComponent(textarea.dataset.id)}/notes`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: textarea.value }),
+      });
+    });
+  });
+}
+
+async function loadHistory() {
+  const response = await fetch("/dtcs/history");
+  const tbody = document.querySelector("#history-table tbody");
+  if (!response.ok) {
+    tbody.innerHTML = `<tr><td colspan="6">Error loading history: ${escapeHtml(await response.text())}</td></tr>`;
+    return;
+  }
+  const events = await response.json();
+  tbody.innerHTML = "";
+  for (const event of events) {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>${escapeHtml(event.code)}</td>
+      <td>${escapeHtml(event.description)}</td>
+      <td>${escapeHtml(vehicleLabel(event))}</td>
+      <td>${escapeHtml(event.first_seen)}</td>
+      <td>${escapeHtml(event.cleared_at || "")}</td>
       <td><textarea data-id="${event.id}">${escapeHtml(event.notes || "")}</textarea></td>
     `;
     tbody.appendChild(row);

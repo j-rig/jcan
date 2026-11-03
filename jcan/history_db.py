@@ -92,6 +92,21 @@ class HistoryDB:
         )
         return [dict(row) for row in cur.fetchall()]
 
+    def all_events(self) -> list[dict]:
+        cur = self._conn.execute(
+            """
+            SELECT e.id, e.code, e.vin, e.first_seen, e.cleared_at, e.notes,
+                   v.make, v.model, v.year,
+                   COALESCE(specific.description, generic.description, 'Unknown DTC') AS description
+            FROM dtc_events e
+            LEFT JOIN vehicles v ON v.vin = e.vin
+            LEFT JOIN dtc_reference specific ON specific.code = e.code AND specific.make = v.make
+            LEFT JOIN dtc_reference generic ON generic.code = e.code AND generic.make = ''
+            ORDER BY e.first_seen DESC, e.id DESC
+            """
+        )
+        return [dict(row) for row in cur.fetchall()]
+
     def clear_active_events(self) -> None:
         now = datetime.now(timezone.utc).isoformat()
         self._conn.execute("UPDATE dtc_events SET cleared_at = ? WHERE cleared_at IS NULL", (now,))
