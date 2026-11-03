@@ -51,13 +51,10 @@ class HistoryDB:
 
     def _seed_dtc_reference(self) -> None:
         entries = json.loads(SEED_DATA_PATH.read_text())
+        self._conn.execute("DELETE FROM dtc_reference")
         for entry in entries:
             self._conn.execute(
-                """
-                INSERT INTO dtc_reference (code, make, description)
-                VALUES (?, ?, ?)
-                ON CONFLICT(code, make) DO UPDATE SET description = excluded.description
-                """,
+                "INSERT INTO dtc_reference (code, make, description) VALUES (?, ?, ?)",
                 (entry["code"], entry.get("make", ""), entry["description"]),
             )
         self._conn.commit()

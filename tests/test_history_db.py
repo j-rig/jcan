@@ -117,3 +117,41 @@ def test_active_events_description_upgrades_to_manufacturer_specific_after_decod
     assert db.active_events()[0]["description"] == (
         "Evaporative Emission System Leak (Fuel Tank System)"
     )
+
+
+def test_dtc_reference_reseed_removes_stale_entries(tmp_path, monkeypatch):
+    import json
+
+    from jcan import history_db as history_db_module
+
+    seed_path = tmp_path / "dtc_codes.json"
+    seed_path.write_text(json.dumps([{"code": "P0507", "make": "", "description": "Old description"}]))
+    monkeypatch.setattr(history_db_module, "SEED_DATA_PATH", seed_path)
+
+    db = HistoryDB(":memory:")
+    db.record_active_codes(["P0507"], vin=None)
+    assert db.active_events()[0]["description"] == "Old description"
+
+    # Simulate editing the seed file to remove the P0507 entry, then a process restart.
+    seed_path.write_text(json.dumps([]))
+    db2 = HistoryDB(":memory:")
+    db2.record_active_codes(["P0507"], vin=None)
+    assert db2.active_events()[0]["description"] == "Unknown DTC"
+
+
+def test_active_events_description_prefers_manufacturer_specific_over_generic(tmp_path, monkeypatch):
+    import json
+
+    from jcan import history_db as history_db_module
+
+    seed_path = tmp_path / "dtc_codes.json"
+    seed_path.write_text(json.dumps([
+        {"code": "P0420", "make": "", "description": "Generic catalyst description"},
+        {"code": "P0420", "make": "Honda", "description": "Honda-specific catalyst description"},
+    ]))
+    monkeypatch.setattr(history_db_module, "SEED_DATA_PATH", seed_path)
+
+    db = HistoryDB(":memory:")
+    db.record_active_codes(["P0420"], vin="VIN123")
+    db.upsert_vehicle("VIN123", "Honda", "Accord", "2008")
+    assert db.active_events()[0]["description"] == "Honda-specific catalyst description"
