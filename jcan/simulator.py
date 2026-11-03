@@ -70,6 +70,26 @@ class Simulator:
             return bytes([0x41, pid, 40 + 25])
         if pid in (0x11, 0x04):
             return bytes([0x41, pid, 128])
+        if pid == 0x0B:
+            return bytes([0x41, pid, 101])
+        if pid == 0x0E:
+            return bytes([0x41, pid, 148])
+        if pid == 0x10:
+            return bytes([0x41, pid, 4, 226])
+        if pid == 0x1F:
+            return bytes([0x41, pid, 0, 125])
+        if pid == 0x2F:
+            return bytes([0x41, pid, 191])
+        if pid == 0x31:
+            return bytes([0x41, pid, 0, 0])
+        if pid == 0x42:
+            return bytes([0x41, pid, 55, 120])
+        if pid == 0x46:
+            return bytes([0x41, pid, 62])
+        if pid == 0x4E:
+            return bytes([0x41, pid, 0, 0])
+        if pid == 0x5C:
+            return bytes([0x41, pid, 135])
         return None
 
     def _handle_read_dtcs(self) -> bytes:

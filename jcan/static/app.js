@@ -5,6 +5,16 @@ const PID_LABELS = {
   throttle_position: "Throttle Position",
   engine_load: "Engine Load",
   intake_air_temp: "Intake Air Temp",
+  intake_manifold_pressure: "Intake Manifold Pressure",
+  timing_advance: "Timing Advance",
+  maf_rate: "MAF Rate",
+  run_time: "Run Time",
+  fuel_level: "Fuel Level",
+  distance_since_codes_cleared: "Distance Since Cleared",
+  control_module_voltage: "Battery Voltage",
+  ambient_air_temp: "Ambient Air Temp",
+  time_since_codes_cleared: "Time Since Cleared",
+  engine_oil_temp: "Engine Oil Temp",
 };
 
 function setupTabs() {
