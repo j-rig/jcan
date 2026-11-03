@@ -34,7 +34,8 @@ class Reader:
 
     def stop(self) -> None:
         self._stop_event.set()
-        self._thread.join(timeout=2.0)
+        if self._thread.is_alive():
+            self._thread.join(timeout=2.0)
 
     def submit(self, action: str) -> "queue.Queue":
         result: "queue.Queue" = queue.Queue(maxsize=1)

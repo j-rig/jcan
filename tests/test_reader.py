@@ -74,3 +74,31 @@ def test_reader_submit_clear_dtcs():
         sim.stop()
         bus_sim.shutdown()
         bus_reader.shutdown()
+
+
+def test_stop_before_start_is_safe():
+    bus = create_bus("virtual", "reader-test-stop-safety")
+    reader = Reader(bus, poll_interval_s=1.0, pid_timeout_s=0.2)
+    reader.stop()  # must not raise
+    bus.shutdown()
+
+
+def test_reader_vin_read_failure_continues_to_connected():
+    channel = "reader-test-vin-failure"
+    bus_reader = create_bus("virtual", channel)
+    # No simulator is listening on this channel, so read_vin() will time out
+    # (pid_timeout_s=0.2 keeps this test fast) rather than ever succeeding.
+    statuses = []
+    reader = Reader(bus_reader, poll_interval_s=1.0, pid_timeout_s=0.2)
+    reader.on_status = lambda status: statuses.append(status)
+    reader.start()
+    try:
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and "connected" not in statuses:
+            time.sleep(0.05)
+        assert "vin_read_failed" in statuses
+        assert "connected" in statuses
+        assert reader.current_vin is None
+    finally:
+        reader.stop()
+        bus_reader.shutdown()
