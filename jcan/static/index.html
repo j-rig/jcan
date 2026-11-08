@@ -10,15 +10,27 @@
     <h1>jcan</h1>
     <nav>
       <button class="tab-button active" data-tab="gauges">Gauges</button>
+      <button class="tab-button" data-tab="readiness">Inspection</button>
       <button class="tab-button" data-tab="diagnostics">Diagnostics</button>
       <button class="tab-button" data-tab="vehicles">Vehicles</button>
       <button class="tab-button" data-tab="history">History</button>
     </nav>
     <div id="connection-banner" class="banner hidden"></div>
+    <button id="simulate-disconnect" title="Debug: force a simulated hardware disconnect">Simulate Disconnect</button>
   </header>
 
   <section id="tab-gauges" class="tab active">
     <div id="gauges"></div>
+  </section>
+
+  <section id="tab-readiness" class="tab">
+    <div id="readiness-summary"></div>
+    <table id="readiness-table">
+      <thead>
+        <tr><th>Monitor</th><th>Status</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
   </section>
 
   <section id="tab-diagnostics" class="tab">

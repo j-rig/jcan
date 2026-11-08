@@ -22,3 +22,12 @@ def test_virtual_buses_on_same_channel_communicate():
 def test_unknown_bus_type_raises():
     with pytest.raises(ValueError):
         create_bus("bogus", "chan")
+
+
+def test_arduino_bus_type_dispatches_to_arduino_serial_bus(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "jcan.can_transport.ArduinoSerialBus", lambda channel: calls.append(channel) or object()
+    )
+    create_bus("arduino", "/dev/tty.usbmodemFAKE")
+    assert calls == ["/dev/tty.usbmodemFAKE"]

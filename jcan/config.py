@@ -11,6 +11,8 @@ class Config:
     db_path: str
     http_host: str
     http_port: int
+    udp_host: str | None
+    udp_port: int
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -22,4 +24,6 @@ class Config:
             db_path=os.environ.get("JCAN_DB_PATH", "jcan.db"),
             http_host=os.environ.get("JCAN_HTTP_HOST", "127.0.0.1"),
             http_port=int(os.environ.get("JCAN_HTTP_PORT", "8000")),
+            udp_host=os.environ.get("JCAN_UDP_HOST") or None,
+            udp_port=int(os.environ.get("JCAN_UDP_PORT", "20110")),
         )

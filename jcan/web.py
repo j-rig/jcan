@@ -27,7 +27,13 @@ async def _broadcast(clients: set, message: str) -> None:
         clients.discard(ws)
 
 
-def create_app(reader, db: HistoryDB, static_dir: str) -> FastAPI:
+def create_app(
+    reader,
+    db: HistoryDB,
+    static_dir: str,
+    debug_controls: bool = False,
+    extra_on_reading=None,
+) -> FastAPI:
     clients: set = set()
 
     @asynccontextmanager
@@ -37,13 +43,20 @@ def create_app(reader, db: HistoryDB, static_dir: str) -> FastAPI:
         def on_reading(name: str, value: float, unit: str) -> None:
             message = json.dumps({"type": "reading", "pid": name, "value": value, "unit": unit})
             asyncio.run_coroutine_threadsafe(_broadcast(clients, message), loop)
+            if extra_on_reading is not None:
+                extra_on_reading(name, value, unit)
 
         def on_status(status: str) -> None:
             message = json.dumps({"type": "status", "status": status})
             asyncio.run_coroutine_threadsafe(_broadcast(clients, message), loop)
 
+        def on_readiness(status: dict) -> None:
+            message = json.dumps({"type": "readiness", **status})
+            asyncio.run_coroutine_threadsafe(_broadcast(clients, message), loop)
+
         reader.on_reading = on_reading
         reader.on_status = on_status
+        reader.on_readiness = on_readiness
         reader.start()
         yield
         reader.stop()
@@ -116,6 +129,16 @@ def create_app(reader, db: HistoryDB, static_dir: str) -> FastAPI:
         )
         return {"vin": vin, "make": decoded["make"], "model": decoded["model"],
                 "year": decoded["year"], "raw": decoded["raw"]}
+
+    if debug_controls:
+        @app.post("/debug/disconnect")
+        async def debug_disconnect():
+            result_queue = reader.submit("simulate_disconnect")
+            try:
+                await asyncio.to_thread(result_queue.get, True, 5.0)
+            except queue_module.Empty:
+                raise HTTPException(status_code=503, detail="No response from reader")
+            return {"disconnected": True}
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 

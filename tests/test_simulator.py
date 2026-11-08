@@ -1,6 +1,7 @@
 from jcan.can_transport import create_bus
 from jcan.dtc import decode_dtcs
 from jcan.obd2 import Obd2Session
+from jcan.readiness import decode_readiness
 from jcan.simulator import FAKE_VIN, Simulator
 
 
@@ -46,6 +47,26 @@ def test_simulator_dtcs_then_clear():
         session.clear_dtcs()
 
         assert decode_dtcs(session.read_dtcs()) == []
+    finally:
+        session.close()
+        sim.stop()
+        bus_sim.shutdown()
+        bus_client.shutdown()
+
+
+def test_simulator_readiness_reflects_dtc_state():
+    sim, session, bus_sim, bus_client = _make_session("sim-test-4")
+    try:
+        before = decode_readiness(session.read_pid(0x01))
+        assert before["mil_on"] is True
+        assert before["dtc_count"] == 2
+        assert {"name": "components", "ready": False} in before["monitors"]
+
+        session.clear_dtcs()
+
+        after = decode_readiness(session.read_pid(0x01))
+        assert after["mil_on"] is False
+        assert after["dtc_count"] == 0
     finally:
         session.close()
         sim.stop()

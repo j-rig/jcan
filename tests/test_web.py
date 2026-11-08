@@ -24,15 +24,22 @@ class StubReader:
         self._next_result = result
 
     def submit(self, action):
+        self.last_action = action
         q = queue.Queue(maxsize=1)
         q.put(self._next_result)
         return q
 
 
-def _client():
+def _client(debug_controls=False, extra_on_reading=None):
     reader = StubReader()
     db = HistoryDB(":memory:")
-    app = create_app(reader, db, static_dir="jcan/static")
+    app = create_app(
+        reader,
+        db,
+        static_dir="jcan/static",
+        debug_controls=debug_controls,
+        extra_on_reading=extra_on_reading,
+    )
     return TestClient(app), reader, db
 
 
@@ -152,6 +159,22 @@ def test_decode_vehicle_502_on_failure(monkeypatch):
     assert response.status_code == 502
 
 
+def test_debug_disconnect_not_registered_without_debug_controls():
+    client, reader, db = _client(debug_controls=False)
+    with client:
+        response = client.post("/debug/disconnect")
+    assert response.status_code == 404
+
+
+def test_debug_disconnect_submits_simulate_disconnect():
+    client, reader, db = _client(debug_controls=True)
+    reader.set_next_result(("ok", None))
+    with client:
+        response = client.post("/debug/disconnect")
+    assert response.status_code == 200
+    assert reader.last_action == "simulate_disconnect"
+
+
 def test_websocket_broadcasts_reading():
     client, reader, db = _client()
     with client:
@@ -159,6 +182,32 @@ def test_websocket_broadcasts_reading():
             reader.on_reading("rpm", 1234.0, "rpm")
             message = websocket.receive_json()
     assert message == {"type": "reading", "pid": "rpm", "value": 1234.0, "unit": "rpm"}
+
+
+def test_websocket_broadcasts_readiness():
+    client, reader, db = _client()
+    with client:
+        with client.websocket_connect("/ws") as websocket:
+            reader.on_readiness(
+                {"mil_on": True, "dtc_count": 2, "monitors": [{"name": "misfire", "ready": True}]}
+            )
+            message = websocket.receive_json()
+    assert message == {
+        "type": "readiness",
+        "mil_on": True,
+        "dtc_count": 2,
+        "monitors": [{"name": "misfire", "ready": True}],
+    }
+
+
+def test_on_reading_also_calls_extra_hook():
+    calls = []
+    client, reader, db = _client(extra_on_reading=lambda *a: calls.append(a))
+    with client:
+        with client.websocket_connect("/ws") as websocket:
+            reader.on_reading("rpm", 1234.0, "rpm")
+            websocket.receive_json()  # wait for the broadcast so on_reading has run
+    assert calls == [("rpm", 1234.0, "rpm")]
 
 
 def test_websocket_broadcasts_status():

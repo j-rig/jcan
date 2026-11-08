@@ -137,6 +137,35 @@ def test_reader_discovers_supported_pids_including_o2():
         bus_reader.shutdown()
 
 
+def test_reader_pushes_readiness_status():
+    channel = "reader-test-readiness"
+    bus_sim = create_bus("virtual", channel)
+    bus_reader = create_bus("virtual", channel)
+    sim = Simulator(bus_sim)
+    sim.start()
+
+    statuses = []
+    readiness_updates = []
+    reader = Reader(bus_reader, poll_interval_s=0.1, pid_timeout_s=1.0)
+    reader.on_status = lambda status: statuses.append(status)
+    reader.on_readiness = lambda status: readiness_updates.append(status)
+    reader.start()
+    try:
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not readiness_updates:
+            time.sleep(0.05)
+        assert readiness_updates
+        status = readiness_updates[0]
+        assert status["mil_on"] is True
+        assert status["dtc_count"] == 2
+        assert {"name": "components", "ready": False} in status["monitors"]
+    finally:
+        reader.stop()
+        sim.stop()
+        bus_sim.shutdown()
+        bus_reader.shutdown()
+
+
 def test_reader_vin_read_failure_continues_to_connected():
     channel = "reader-test-vin-failure"
     bus_reader = create_bus("virtual", channel)
@@ -187,6 +216,82 @@ def test_reader_excludes_unsupported_pids():
         reader.stop()
         stop_server()
         bus_server.shutdown()
+        bus_reader.shutdown()
+
+
+def test_reader_simulate_disconnect_acks_then_reports_lost():
+    channel = "reader-test-simulate-disconnect"
+    bus_sim = create_bus("virtual", channel)
+    bus_reader = create_bus("virtual", channel)
+    sim = Simulator(bus_sim)
+    sim.start()
+
+    statuses = []
+    reader = Reader(bus_reader, poll_interval_s=0.1, pid_timeout_s=1.0)
+    reader.on_status = lambda status: statuses.append(status)
+    reader.start()
+    try:
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and "connected" not in statuses:
+            time.sleep(0.05)
+
+        status, payload = reader.submit("simulate_disconnect").get(timeout=3.0)
+        assert status == "ok"
+        assert payload is None
+
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not any(s.startswith("lost") for s in statuses):
+            time.sleep(0.05)
+        assert any(s.startswith("lost") for s in statuses)
+
+        # Default reconnect delay is 30s; well within that, no readings resume.
+        readings_before = []
+        reader.on_reading = lambda name, value, unit: readings_before.append(name)
+        time.sleep(0.3)
+        assert readings_before == []
+    finally:
+        reader.stop()
+        sim.stop()
+        bus_sim.shutdown()
+        bus_reader.shutdown()
+
+
+def test_reader_simulate_disconnect_auto_reconnects_after_delay():
+    channel = "reader-test-simulate-disconnect-reconnect"
+    bus_sim = create_bus("virtual", channel)
+    bus_reader = create_bus("virtual", channel)
+    sim = Simulator(bus_sim)
+    sim.start()
+
+    statuses = []
+    reader = Reader(
+        bus_reader, poll_interval_s=0.1, pid_timeout_s=1.0, simulated_reconnect_delay_s=0.2
+    )
+    reader.on_status = lambda status: statuses.append(status)
+    reader.start()
+    try:
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and "connected" not in statuses:
+            time.sleep(0.05)
+
+        reader.submit("simulate_disconnect").get(timeout=3.0)
+
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and statuses.count("connected") < 2:
+            time.sleep(0.05)
+        assert statuses.count("connected") == 2
+        assert any(s.startswith("lost") for s in statuses)
+
+        readings = []
+        reader.on_reading = lambda name, value, unit: readings.append(name)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and not readings:
+            time.sleep(0.05)
+        assert readings  # polling resumed after reconnect
+    finally:
+        reader.stop()
+        sim.stop()
+        bus_sim.shutdown()
         bus_reader.shutdown()
 
 

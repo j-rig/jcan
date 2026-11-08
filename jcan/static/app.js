@@ -25,6 +25,20 @@ const PID_LABELS = {
   o2_b2s4: "O2 Bank 2 Sensor 4",
 };
 
+const MONITOR_LABELS = {
+  misfire: "Misfire",
+  fuel_system: "Fuel System",
+  components: "Components",
+  catalyst: "Catalyst",
+  heated_catalyst: "Heated Catalyst",
+  evaporative_system: "Evaporative System",
+  secondary_air_system: "Secondary Air System",
+  ac_refrigerant: "A/C Refrigerant",
+  oxygen_sensor: "Oxygen Sensor",
+  oxygen_sensor_heater: "Oxygen Sensor Heater",
+  egr_system: "EGR System",
+};
+
 function setupTabs() {
   const buttons = document.querySelectorAll(".tab-button");
   buttons.forEach((button) => {
@@ -80,6 +94,36 @@ function renderGauge(pid, value, unit) {
   el.querySelector(".gauge-sparkline polyline").setAttribute("points", points);
 }
 
+function renderReadiness(data) {
+  const notReady = data.monitors.filter((m) => !m.ready);
+  const milLine = data.mil_on
+    ? `Check Engine Light: ON (${data.dtc_count} code${data.dtc_count === 1 ? "" : "s"})`
+    : "Check Engine Light: OFF";
+  const isReady = !data.mil_on && notReady.length === 0;
+  const readyLine = data.mil_on
+    ? "NOT READY — check engine light is on"
+    : isReady
+      ? "READY — all monitors complete"
+      : `NOT READY — ${notReady.length} monitor${notReady.length === 1 ? "" : "s"} incomplete`;
+
+  const summary = document.getElementById("readiness-summary");
+  summary.innerHTML = `
+    <p>${escapeHtml(milLine)}</p>
+    <p class="${isReady ? "ready" : "not-ready"}">${escapeHtml(readyLine)}</p>
+  `;
+
+  const tbody = document.querySelector("#readiness-table tbody");
+  tbody.innerHTML = "";
+  for (const monitor of data.monitors) {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>${escapeHtml(MONITOR_LABELS[monitor.name] || monitor.name)}</td>
+      <td class="${monitor.ready ? "ready" : "not-ready"}">${monitor.ready ? "Ready" : "Not Ready"}</td>
+    `;
+    tbody.appendChild(row);
+  }
+}
+
 function markStaleGauges() {
   const now = Date.now();
   document.querySelectorAll(".gauge").forEach((el) => {
@@ -100,6 +144,8 @@ function setupWebSocket() {
         renderGauge(message.pid, message.value, message.unit);
       } else if (message.type === "status") {
         showConnectionStatus(message.status);
+      } else if (message.type === "readiness") {
+        renderReadiness(message);
       }
     };
     ws.onclose = () => {
@@ -243,6 +289,15 @@ async function loadVehicles() {
   });
 }
 
+function setupDebugControls() {
+  document.getElementById("simulate-disconnect").addEventListener("click", async () => {
+    const response = await fetch("/debug/disconnect", { method: "POST" });
+    if (!response.ok) {
+      alert("Simulated disconnect isn't available (not running against the simulator).");
+    }
+  });
+}
+
 function setupDiagnosticsControls() {
   document.getElementById("refresh-dtcs").addEventListener("click", loadDtcs);
   const dialog = document.getElementById("confirm-clear-dialog");
@@ -261,4 +316,5 @@ function setupDiagnosticsControls() {
 setupTabs();
 setupWebSocket();
 setupDiagnosticsControls();
+setupDebugControls();
 loadDtcs();

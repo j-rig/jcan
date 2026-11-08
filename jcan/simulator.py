@@ -57,6 +57,12 @@ class Simulator:
         return None
 
     def _handle_pid(self, pid: int) -> bytes | None:
+        if pid == 0x01:
+            # MIL/DTC count mirrors the fake stored DTCs; monitors: misfire/fuel system
+            # ready, components not yet complete; catalyst/evaporative/O2/O2
+            # heater/EGR supported with evaporative system not yet complete.
+            a = (0x80 | len(FAKE_DTCS)) if not self._dtcs_cleared else 0x00
+            return bytes([0x41, pid, a, 0x47, 0xE5, 0x04])
         if pid == 0x00:
             return bytes([0x41, pid, 0x18, 0x3F, 0xB8, 0x03])
         if pid == 0x20:

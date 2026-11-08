@@ -8,8 +8,13 @@ import can
 
 from . import pid_discovery
 from . import pids as pids_module
+from . import readiness as readiness_module
 from .dtc import decode_dtcs
 from .obd2 import Obd2Error, Obd2Session
+
+
+class _SimulatedDisconnect(Exception):
+    pass
 
 
 @dataclass
@@ -19,16 +24,24 @@ class _Command:
 
 
 class Reader:
-    def __init__(self, bus: can.BusABC, poll_interval_s: float, pid_timeout_s: float):
+    def __init__(
+        self,
+        bus: can.BusABC,
+        poll_interval_s: float,
+        pid_timeout_s: float,
+        simulated_reconnect_delay_s: float = 30.0,
+    ):
         self._bus = bus
         self._poll_interval_s = poll_interval_s
         self._pid_timeout_s = pid_timeout_s
+        self._simulated_reconnect_delay_s = simulated_reconnect_delay_s
         self._commands: "queue.Queue[_Command]" = queue.Queue()
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self.current_vin: str | None = None
         self.live_pids: list[pids_module.PidDef] = list(pids_module.LIVE_PIDS)
         self.on_reading: Callable[[str, float, str], None] = lambda *_: None
+        self.on_readiness: Callable[[dict], None] = lambda *_: None
         self.on_status: Callable[[str], None] = lambda *_: None
 
     def start(self) -> None:
@@ -45,11 +58,24 @@ class Reader:
         return result
 
     def _run(self) -> None:
+        while not self._stop_event.is_set():
+            if not self._connect_and_poll():
+                return
+            # Only a simulated disconnect reaches here — a real bus/transport
+            # loss stays terminal (see _connect_and_poll), matching real
+            # hardware: no silent retry loop. This delay exists purely so the
+            # debug "Simulate Disconnect" control has something to recover
+            # from, for demoing the disconnected UI state.
+            self._stop_event.wait(self._simulated_reconnect_delay_s)
+
+    def _connect_and_poll(self) -> bool:
+        """Runs one connect+poll session. Returns True if the caller should
+        reconnect (simulated disconnect), False if the thread should end."""
         try:
             session = Obd2Session(self._bus, timeout=self._pid_timeout_s)
         except Exception as exc:
             self.on_status(f"connect_failed: {exc}")
-            return
+            return False
 
         try:
             self.current_vin = session.read_vin()
@@ -77,6 +103,7 @@ class Reader:
 
         self.on_status("connected")
         last_poll = 0.0
+        reconnect = False
         try:
             while not self._stop_event.is_set():
                 self._drain_one_command(session)
@@ -86,16 +113,28 @@ class Reader:
                     last_poll = now
                 else:
                     time.sleep(0.05)
+        except _SimulatedDisconnect as exc:
+            reconnect = True
+            self.on_status(
+                f"lost: {exc} (reconnecting in {self._simulated_reconnect_delay_s:.0f}s)"
+            )
         except Exception as exc:
             self.on_status(f"lost: {exc}")
         finally:
             session.close()
+        return reconnect
 
     def _drain_one_command(self, session: Obd2Session) -> None:
         try:
             command = self._commands.get_nowait()
         except queue.Empty:
             return
+        if command.action == "simulate_disconnect":
+            command.result.put(("ok", None))
+            # Deliberately escapes the Obd2Error-only handling below so it hits
+            # _connect_and_poll's outer except — the same path a real
+            # bus/transport failure takes — rather than a per-command error result.
+            raise _SimulatedDisconnect("simulated disconnect")
         try:
             if command.action == "read_dtcs":
                 codes = decode_dtcs(session.read_dtcs())
@@ -122,3 +161,8 @@ class Reader:
                 self.on_reading(pid_def.name, value, pid_def.unit)
             except Obd2Error:
                 continue
+        try:
+            raw = session.read_pid(readiness_module.PID_MONITOR_STATUS)
+            self.on_readiness(readiness_module.decode_readiness(raw))
+        except Obd2Error:
+            pass
